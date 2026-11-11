@@ -23,6 +23,10 @@ as a harmonic of 14 Hz: the designed disks are rated to 210 Hz, the substitutes 
 now to 126 Hz. The speed chopcal picks, which a long burst can make slower, is shown under
 that control.
 
+Below those, each chopper's delay has its own slider. It follows chopcal whenever one of
+chopcal's inputs (lowest energy, shaping time, PSC limit) changes, unless its lock is
+pressed. A delay moved by hand stays put until one of those inputs changes.
+
 A static version of this figure is on the chopcal documentation page
 *See BIFROST's source through its train*.
 

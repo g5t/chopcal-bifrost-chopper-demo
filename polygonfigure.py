@@ -31,6 +31,9 @@ SOURCE_PLANE = 0.05  # m
 #: The fastest the designed pulse-shaping disks may turn, Hz: the 15th harmonic of 14 Hz.
 #: chopcal's own default is 196 Hz. The 126 Hz substitutes installed now are the 9th.
 PSC_SPEED_MAX = 210.0
+#: Delay slider ranges, ms: what chopcal.bifrost gives over the controls' ranges, and some.
+DELAY_RANGES_MS = {'ps1': (-20.0, 20.0), 'ps2': (0.0, 40.0), 'fo1': (0.0, 25.0),
+                   'fo2': (0.0, 40.0), 'bw1': (0.0, 180.0), 'bw2': (0.0, 180.0)}
 #: The pulse-shaping pair and the bandwidth pair each share a housing.
 GROUPS = [0, 0, 1, 2, 3, 3]
 NAMES = ('ps1', 'ps2', 'fo1', 'fo2', 'bw1', 'bw2')
@@ -66,7 +69,7 @@ def rebinned(wavelength_edges, time_edges, name: str = 'ess-bifrost') -> np.ndar
 
 def trains(energy_min: float, shaping_time: float,
            pulse_shaping_speed_max: float = PSC_SPEED_MAX,
-           pulse_delay: float = 0.0):
+           pulse_delay: float = 0.0, delays: dict | None = None):
     """BIFROST's discs twice over, with paths from the source plane rather than the
     moderator: once with the beam's inner-corner aperture, which bounds where anything
     gets through, and once with its centre aperture, which sets the ramps a weighted
@@ -74,7 +77,8 @@ def trains(energy_min: float, shaping_time: float,
 
     `pulse_delay` (s) is added to every disc's delay, as ESS's ``BeamPosDly-S`` is when
     the experiment delays NICOS sets stay as they are: the whole train moves together.
-    chopcal's settings are for none.
+    chopcal's settings are for none. `delays` (s), by chopper name, replace chopcal's
+    delays for those choppers; their speeds stay chopcal's.
     """
     import chopcal
     from chopcal import constants as c
@@ -89,13 +93,15 @@ def trains(energy_min: float, shaping_time: float,
                               at='centre'),
     }
 
-    def moved(disc, aperture):
-        return Chopper(disc.speed, disc.delay + pulse_delay, disc.beam, list(disc.edges),
-                       disc.path - SOURCE_PLANE, aperture)
+    delays = delays or {}
 
-    support = [moved(settings[n], settings[n].aperture) for n in NAMES]
-    ramped = [moved(settings[n], centre['wide' if n.startswith('bw') else 'narrow'])
-              for n in NAMES]
+    def moved(name, aperture):
+        disc = settings[name]
+        return Chopper(disc.speed, delays.get(name, disc.delay) + pulse_delay, disc.beam,
+                       list(disc.edges), disc.path - SOURCE_PLANE, aperture)
+
+    support = [moved(n, settings[n].aperture) for n in NAMES]
+    ramped = [moved(n, centre['wide' if n.startswith('bw') else 'narrow']) for n in NAMES]
     return support, ramped
 
 
@@ -166,7 +172,7 @@ def swept(vertices, l0: float, l1: float):
 def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
                  latest_emission=3e-3, wavelength_bin=0.02, time_bin=20e-6,
                  arrival_bins=400, pulse_shaping_speed_max=PSC_SPEED_MAX, pulse_delay=0.0,
-                 source='ess-bifrost') -> Transmission:
+                 delays=None, source='ess-bifrost') -> Transmission:
     """The source in a (wavelength, emission time) rectangle, through BIFROST's train.
 
     The rectangle is the source polygon chopcal transmits and the extent of the gridded
@@ -187,7 +193,7 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
                                  inverse_velocities[-1] - inverse_velocities[0],
                                  time_edges[0], time_edges[-1] - time_edges[0])
     support_train, ramped_train = trains(energy_min, shaping_time, pulse_shaping_speed_max,
-                                         pulse_delay)
+                                         pulse_delay, delays)
     support = rectangle.transmit(support_train)
     weighted = rectangle.transmit_weighted(ramped_train, GROUPS)
 
@@ -499,8 +505,9 @@ def ensure_widget_backend(quiet: bool = False) -> bool:
 
 
 def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
-    from ipywidgets import (Checkbox, FloatRangeSlider, FloatSlider, HBox, Label, Layout,
-                            SelectionSlider, VBox)
+    from ipywidgets import (Checkbox, FloatRangeSlider, FloatSlider, HBox, HTML, Label,
+                            Layout, SelectionSlider, ToggleButton, VBox)
+    import chopcal
     import matplotlib.pyplot as plt
 
     style = {'description_width': '9em'}
@@ -529,13 +536,45 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
     for widget in controls.values():
         widget.style, widget.layout, widget.continuous_update = style, wide, False
 
+
+    # one delay per disc, following chopcal until frozen, and free to move by hand until
+    # one of chopcal's own inputs changes; ranges cover chopcal over these controls' ranges
+    # and widen if chopcal ever goes beyond them
+    delays = {n: FloatSlider(value=0.0, min=lo, max=hi, step=0.001, readout_format='.3f',
+                             description=f'{n} delay [ms]', continuous_update=False,
+                             style=style, layout=Layout(width='22em'))
+              for n, (lo, hi) in DELAY_RANGES_MS.items()}
+    frozen = {n: ToggleButton(value=False, icon='lock', tooltip='keep this delay when '
+                              "chopcal's inputs change", layout=Layout(width='3em'))
+              for n in NAMES}
+    suggested = {n: Label() for n in NAMES}   # what chopcal says now, frozen or not
+    chopcal_inputs = ('energy_min', 'shaping_time', 'psc_speed_max')
+    state = {'colorbar': None, 'syncing': False}
+
+    def follow_chopcal(*_):
+        settings = chopcal.bifrost(energy_min=controls['energy_min'].value,
+                                   shaping_time=controls['shaping_time'].value * 1e-3,
+                                   pulse_shaping_speed_max=controls['psc_speed_max'].value)
+        state['syncing'] = True   # one redraw for all six, not one each
+        try:
+            for n in NAMES:
+                value = settings[n].delay * 1e3
+                suggested[n].value = f'chopcal {value:.3f}'
+                if not frozen[n].value:
+                    delays[n].min = min(delays[n].min, value)
+                    delays[n].max = max(delays[n].max, value)
+                    delays[n].value = value
+        finally:
+            state['syncing'] = False
+
     with plt.ioff():
         fig, axes = make_axes()
     status = Label()
     psc = Label()   # what chopcal picked: the fastest harmonic the burst allows
-    state = {'colorbar': None}
 
     def update(*_):
+        if state['syncing']:
+            return
         v = {k: w.value for k, w in controls.items()}
         result = transmission(energy_min=v['energy_min'], shaping_time=v['shaping_time'] * 1e-3,
                               wavelength_range=v['wavelength_range'],
@@ -543,7 +582,8 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                               wavelength_bin=v['wavelength_bin'],
                               time_bin=v['time_bin'] * 1e-6,
                               pulse_delay=v['pulse_delay'] * 1e-6,
-                              pulse_shaping_speed_max=v['psc_speed_max'])
+                              pulse_shaping_speed_max=v['psc_speed_max'],
+                              delays={n: w.value * 1e-3 for n, w in delays.items()})
         state['colorbar'] = draw(result, axes, colorbar=state['colorbar'], log=v['log'])
         fig.canvas.draw_idle()
         status.value = (f'{result.source.shape[1]} x {result.source.shape[0]} bins; '
@@ -552,12 +592,16 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                   if result.psc_speed < v['psc_speed_max'] else '')
         psc.value = f'PSC turns at {result.psc_speed:g} Hz{slower}'
 
-    for widget in controls.values():
+    for name in chopcal_inputs:   # before `update`, so the delays are chopcal's first
+        controls[name].observe(follow_chopcal, names='value')
+    for widget in [*controls.values(), *delays.values()]:
         widget.observe(update, names='value')
+    follow_chopcal()
     update()
     widgets = list(controls.values())
     widgets.insert(widgets.index(controls['psc_speed_max']) + 1, psc)
-    return HBox([fig.canvas, VBox([*widgets, status])])
+    rows = [HBox([delays[n], frozen[n], suggested[n]]) for n in NAMES]
+    return HBox([fig.canvas, VBox([*widgets, status, HTML('<b>chopper delays</b>'), *rows])])
 
 
 def bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
@@ -594,4 +638,35 @@ if __name__ == '__main__':
             times = [t + (at - SOURCE_PLANE) * w * per_angstrom for t, w in polygon]
             assert any(a - 1e-9 <= min(times) and max(times) <= b + 1e-9
                        for a, b in windows), at
+    # replacing every delay by chopcal's plus x moves the train as a pulse delay x does
+    import chopcal
+    settings = chopcal.bifrost(energy_min=4.5, shaping_time=2e-4,
+                               pulse_shaping_speed_max=PSC_SPEED_MAX)
+    moved = transmission(delays={n: settings[n].delay + 1e-4 for n in NAMES})
+    assert np.allclose(moved.outline, transmission(pulse_delay=1e-4).outline)
+
+    # the delay sliders follow chopcal until frozen, and keep a hand-set value until one
+    # of chopcal's inputs changes
+    import matplotlib
+    matplotlib.use('module://ipympl.backend_nbagg')
+    panel = _bifrost_transmitted_phasespace_figure().children[1].children
+    control = {w.description: w for w in panel if hasattr(w, 'description')}
+    rows = {r.children[0].description.split()[0]: r.children for r in panel
+            if type(r).__name__ == 'HBox'}
+
+    def chopcal_ms(name):
+        return chopcal.bifrost(energy_min=control['lowest energy [meV]'].value,
+                               shaping_time=control['shaping time [ms]'].value * 1e-3,
+                               pulse_shaping_speed_max=control['PSC limit'].value
+                               )[name].delay * 1e3
+
+    assert all(np.isclose(rows[n][0].value, chopcal_ms(n)) for n in NAMES)
+    rows['ps1'][0].value = 1.234                   # by hand
+    rows['fo1'][1].value = True                    # frozen
+    fo1 = rows['fo1'][0].value
+    control['last emission [ms]'].value = 4.0      # not one of chopcal's inputs
+    assert rows['ps1'][0].value == 1.234
+    control['lowest energy [meV]'].value = 7.0     # one of chopcal's inputs
+    assert np.isclose(rows['ps1'][0].value, chopcal_ms('ps1'))
+    assert rows['fo1'][0].value == fo1 and not np.isclose(fo1, chopcal_ms('fo1'))
     print('ok')
