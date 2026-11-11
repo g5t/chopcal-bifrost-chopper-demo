@@ -10,7 +10,8 @@ computed exactly by [`chopcal`](https://pypi.org/project/chopcal/).
   top). Dashed curves count the whole transmitted region as open; solid ones weight it by
   how likely each neutron is to get through while a disc's edge is still sweeping the beam.
 - **Below:** a time-distance diagram, showing which chopper stops each part of the source
-  and what reaches the sample, over the whole instrument and near the source.
+  and what reaches the sample, over the whole instrument and near the source. Each
+  chopper is a line with gaps where it is open.
 
 The controls set the lowest energy and pulse-shaping time chopcal places the band at, the
 source rectangle and the grid it is binned on, a pulse delay that moves every disc

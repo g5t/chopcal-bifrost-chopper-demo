@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import combinations
+from math import ceil, floor
 
 import numpy as np
 
@@ -113,6 +114,27 @@ class Transmission:
     #: for each entry of `positions`, the (time, distance) outlines of the neutrons that
     #: got through every chopper before it, swept from the source plane up to it
     stages: list
+    #: for each chopper, the (start, end) times in s that any of the beam can pass it,
+    #: from 0 to past the latest time in `stages`
+    openings: list
+
+
+def open_windows(chopper, until: float):
+    """When a disc passes any of the beam, as sorted (start, end) times from 0 to `until`.
+
+    An edge at angle a is on the beam at delay + (beam - a) / (360 speed), the openings
+    recur every 1/|speed|, and the aperture widens each by half of itself at both ends.
+    """
+    turn = 360 * abs(chopper.speed)
+    half = chopper.aperture / 2 / turn
+    windows = []
+    for a, b in chopper.openings:
+        start, end = sorted(chopper.delay + (chopper.beam - x) / (360 * chopper.speed)
+                            for x in (a, b))
+        start, end = start - half, end + half
+        for n in range(ceil(-end * turn / 360), floor((until - start) * turn / 360) + 1):
+            windows.append((start + n * 360 / turn, end + n * 360 / turn))
+    return sorted(windows)
 
 
 def swept(vertices, l0: float, l1: float):
@@ -186,6 +208,9 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
         stages.append([[(t, l + SOURCE_PLANE) for t, l in swept(p.vertices, 0.0, stop)]
                        for p in through.polygons])
     positions = [(n, stop + SOURCE_PLANE) for n, stop in stops]
+    until = 1.1 * max((t for polygons in stages for q in polygons for t, _ in q),
+                      default=1 / 14)
+    openings = [open_windows(chopper, until) for chopper in support_train]
     return Transmission(
         wavelength_edges=wavelength_edges, time_edges=time_edges, source=amounts,
         outline=outline, arrival_edges=arrival_edges,
@@ -193,7 +218,7 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
         by_wavelength=by_wavelength(weighted), by_wavelength_support=by_wavelength(support),
         transmitted=weighted.integrate(amounts, inverse_velocities, time_edges),
         emitted=float(amounts.sum()), psc_speed=abs(support_train[0].speed),
-        positions=positions, stages=stages)
+        positions=positions, stages=stages, openings=openings)
 
 
 # -- wavelength and energy --------------------------------------------------------------
@@ -338,8 +363,9 @@ def draw_time_distance(result: Transmission, ax, top: float | None = None):
     """Where the transmitted neutrons are, and where the rest stop.
 
     Each band is what got through every chopper before one, from the source to that
-    chopper; later bands are drawn over earlier ones, so what is left showing of a band is
-    what that chopper stops. The last band, to the sample, is the outlined region.
+    chopper. The bands are translucent, so where they overlap shows; the part of a band
+    the next one does not cover is what that chopper stops. The last band, to the
+    sample, is the outlined region. Each chopper is a line broken where it is open.
     `top` (m) shows only the instrument up to there.
     """
     import matplotlib.pyplot as plt
@@ -350,12 +376,23 @@ def draw_time_distance(result: Transmission, ax, top: float | None = None):
         label = 'reaches the sample' if name == 'sample' else f'stopped by {name}'
         for polygon in polygons:
             ax.add_patch(Polygon([(t * 1e3, l) for t, l in polygon], closed=True,
-                                 facecolor=colour, edgecolor='none', label=label))
+                                 facecolor=colour, edgecolor=colour, alpha=0.35,
+                                 linewidth=0.8, label=label))
             label = None
     top = result.positions[-1][1] if top is None else top
     latest = max((_latest_below(p, top) for polygons in result.stages for p in polygons),
                  default=1 / 14)
-    # one line and name per housing: the pairs are centimetres apart
+    # each disc closed between its openings; a pair's lines lie on top of each other, so
+    # its gaps show only where both discs are open
+    end = 1.03 * latest
+    for (_, at), windows in zip(result.positions, result.openings):
+        if at > top:
+            continue
+        starts = [0.0] + [b for _, b in windows]
+        ends = [a for a, _ in windows] + [end]
+        closed = [(a * 1e3, b * 1e3) for a, b in zip(starts, ends) if a < b and a < end]
+        ax.hlines([at] * len(closed), *zip(*closed), color='0.2', linewidth=1.4)
+    # one name per housing: the pairs are centimetres apart
     housings = []
     for name, at in result.positions:
         if at > top:
@@ -365,11 +402,11 @@ def draw_time_distance(result: Transmission, ax, top: float | None = None):
         else:
             housings.append(([name], at))
     for names, at in housings:
-        ax.axhline(at, color='0.4', linewidth=0.6)
         ax.annotate('/'.join(names), (1.0, at), xycoords=('axes fraction', 'data'),
                     xytext=(4, 0), textcoords='offset points', va='center',
                     fontsize='small')
-    ax.set_xlim(0.0, 1.03 * latest * 1e3)
+    ax.axhline(result.positions[-1][1], color='0.4', linewidth=0.6)   # the sample
+    ax.set_xlim(0.0, end * 1e3)
     ax.set_ylim(0.0, 1.03 * top)
     ax.set_xlabel('time [ms]')
     ax.set_ylabel('distance from the moderator [m]')
@@ -428,7 +465,7 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                                   description='lowest energy [meV]'),
         'shaping_time': FloatSlider(value=t_psc, min=0.05, max=2.0, step=0.05,
                                     description='shaping time [ms]'),
-        'latest_emission': FloatSlider(value=3.0, min=0.5, max=6.0, step=0.1,
+        'latest_emission': FloatSlider(value=3.0, min=0.5, max=12.0, step=0.1,
                                        description='last emission [ms]'),
         'wavelength_range': FloatRangeSlider(value=(1.0, 6.0), min=0.2, max=19.9, step=0.1,
                                              description='wavelengths [Å]'),
@@ -499,4 +536,12 @@ if __name__ == '__main__':
     assert len(result.stages[-1]) == len(result.outline)
     last = np.array(result.stages[-1][0])
     assert np.isclose(last[:, 0].min(), min(t for t, _ in result.outline[0]))
+    # what the train transmits crosses every disc inside one of its openings
+    from chopcal.lib import wavelength_to_inverse_velocity
+    per_angstrom = wavelength_to_inverse_velocity(1.0)
+    for (_, at), windows in zip(result.positions, result.openings):
+        for polygon in result.outline:
+            times = [t + (at - SOURCE_PLANE) * w * per_angstrom for t, w in polygon]
+            assert any(a - 1e-9 <= min(times) and max(times) <= b + 1e-9
+                       for a, b in windows), at
     print('ok')
