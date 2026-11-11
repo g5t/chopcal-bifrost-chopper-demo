@@ -9,6 +9,9 @@ computed exactly by [`chopcal`](https://pypi.org/project/chopcal/).
 - **Right:** what reaches the sample, by arrival time and by wavelength (energy along the
   top). Dashed curves count the whole transmitted region as open; solid ones weight it by
   how likely each neutron is to get through while a disc's edge is still sweeping the beam.
+  On a second axis of the wavelength pane, in green, is the wavelength spread σλ of the
+  neutrons arriving together, against their mean wavelength: how well arrival time pins
+  wavelength down.
 - **Below:** a time-distance diagram, showing which chopper stops each part of the source
   and what reaches the sample, over the whole instrument and near the source. Each
   chopper is a line with gaps where it is open.
@@ -42,7 +45,7 @@ Without uv, any Python 3.11 or newer works:
 ```sh
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install "chopcal>=0.7" tof scipp numpy matplotlib ipympl ipywidgets jupyterlab
+pip install "chopcal>=0.8" tof scipp numpy matplotlib ipympl ipywidgets jupyterlab
 jupyter lab bifrost_phasespace.ipynb
 ```
 

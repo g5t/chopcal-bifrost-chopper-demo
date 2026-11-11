@@ -462,7 +462,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "chopcal", specifier = ">=0.7" },
+    { name = "chopcal", specifier = ">=0.8" },
     { name = "ipympl" },
     { name = "ipywidgets" },
     { name = "jupyterlab" },

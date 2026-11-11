@@ -4,7 +4,8 @@ The ESS source BIFROST sees is tabulated by ``tof`` on a fine grid of (wavelengt
 emission time). chopcal builds the region of that plane the six choppers transmit --
 exactly, as convex polygons -- and weights it by how likely each neutron is to get
 through a disc whose edge is still sweeping the beam. Integrating the gridded source over
-that weighted region gives what reaches the sample, by arrival time and by wavelength.
+that weighted region gives what reaches the sample, by arrival time and by wavelength,
+and the mean and spread of wavelength in each arrival-time bin.
 
 Three layers, so the same numbers serve a notebook and a static picture:
 
@@ -12,8 +13,8 @@ Three layers, so the same numbers serve a notebook and a static picture:
 - `draw` puts a result on three matplotlib axes;
 - `bifrost_transmitted_phasespace_figure` wires both to ipywidgets controls.
 
-Needs chopcal >= 0.7 (`Region.transmit_weighted`, `beam_aperture(..., at='centre')`) and
-``tof`` for the source distribution.
+Needs chopcal >= 0.8 (`Region.transmit_weighted`, `beam_aperture(..., at='centre')`,
+`Region.arrival_moments`) and ``tof`` for the source distribution.
 """
 from __future__ import annotations
 
@@ -109,6 +110,11 @@ class Transmission:
     at_sample: np.ndarray               # weighted amount per arrival bin
     at_sample_support: np.ndarray       # the same counting the whole region as open
     by_wavelength: np.ndarray           # weighted amount per wavelength bin
+    #: per arrival bin, the mean wavelength and its standard deviation, Å; NaN where
+    #: nothing arrives -- what a time-of-flight measurement can know of a neutron's
+    #: wavelength from when it reaches the sample
+    spread: tuple
+    spread_support: tuple               # the same counting the whole region as open
     by_wavelength_support: np.ndarray
     transmitted: float                  # weighted total
     emitted: float                      # total in the source rectangle
@@ -194,9 +200,9 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
     else:
         arrival_edges = np.linspace(0.0, 1 / 14, arrival_bins + 1)
 
-    def arrivals(region):
-        return region.arrivals(amounts, inverse_velocities, time_edges, distance,
-                               arrival_edges).sum(axis=1)
+    def moments(region):
+        return region.arrival_moments(amounts, inverse_velocities, time_edges, distance,
+                                      arrival_edges)
 
     def by_wavelength(region):
         return (amounts * region.coverage(inverse_velocities, time_edges)).sum(axis=0)
@@ -215,10 +221,13 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
     until = 1.1 * max((t for polygons in stages for q in polygons for t, _ in q),
                       default=1 / 14)
     openings = [open_windows(chopper, until) for chopper in support_train]
+    at_sample, at_sample_support = moments(weighted), moments(support)
     return Transmission(
         wavelength_edges=wavelength_edges, time_edges=time_edges, source=amounts,
         outline=outline, arrival_edges=arrival_edges,
-        at_sample=arrivals(weighted), at_sample_support=arrivals(support),
+        at_sample=at_sample.amount, at_sample_support=at_sample_support.amount,
+        spread=(at_sample.wavelength, at_sample.sigma),
+        spread_support=(at_sample_support.wavelength, at_sample_support.sigma),
         by_wavelength=by_wavelength(weighted), by_wavelength_support=by_wavelength(support),
         transmitted=weighted.integrate(amounts, inverse_velocities, time_edges),
         emitted=float(amounts.sum()), psc_speed=abs(support_train[0].speed),
@@ -286,6 +295,9 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
         ax.clear()
         for secondary in list(getattr(ax, 'child_axes', [])):
             secondary.remove()
+    for ax in list(left.figure.axes):   # the twinned spread axis from the last draw
+        if ax.get_label() == 'spread':
+            ax.remove()
 
     w, t = result.wavelength_edges, result.time_edges
     density = result.source / np.outer(np.diff(t * 1e3), np.diff(w))   # per ms per Å
@@ -344,9 +356,21 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     top = wavelength.secondary_xaxis('top', functions=(_energy, _wavelength))
     _energy_axis(top.xaxis, wavelength.get_xlim())
     top.set_xlabel('energy [meV]')
-    wavelength.legend(loc='upper left', bbox_to_anchor=(1.01, 1.0), fontsize='small')
     if log:
         _log_intensity(wavelength, result.by_wavelength_support / wstep)
+    # the wavelength spread of what arrives together, against its mean wavelength
+    spread = wavelength.twinx()
+    spread.set_label('spread')
+    for (mean, sigma), style, label in (
+            (result.spread_support, dict(linestyle='--', linewidth=0.9), 'σλ, whole open'),
+            (result.spread, dict(linewidth=1.3), 'σλ, weighted')):
+        spread.plot(mean, sigma * 1e3, color='C2', label=label, **style)
+    spread.set_ylim(bottom=0.0)
+    spread.set_ylabel('σλ per arrival time [mÅ]', color='C2')
+    spread.tick_params(axis='y', colors='C2')
+    handles = [h for ax in (wavelength, spread) for h in ax.get_legend_handles_labels()[0]]
+    wavelength.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.12, 1.0),
+                      fontsize='small')
 
     fraction = result.transmitted / result.emitted if result.emitted else 0.0
     text = title + '\n' if title else ''
