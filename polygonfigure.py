@@ -322,7 +322,7 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     time.set_xlabel('arrival time at the sample [ms]')
     time.set_ylabel('intensity [per ms, arb.]')
     time.set_xlim(a[0], a[-1])
-    time.legend(loc='upper right', fontsize='small')
+    time.legend(loc='upper left', bbox_to_anchor=(1.01, 1.0), fontsize='small')
     if log:
         _log_intensity(time, result.at_sample_support / step)
 
@@ -340,7 +340,7 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     top = wavelength.secondary_xaxis('top', functions=(_energy, _wavelength))
     _energy_axis(top.xaxis, wavelength.get_xlim())
     top.set_xlabel('energy [meV]')
-    wavelength.legend(loc='upper right', fontsize='small')
+    wavelength.legend(loc='upper left', bbox_to_anchor=(1.01, 1.0), fontsize='small')
     if log:
         _log_intensity(wavelength, result.by_wavelength_support / wstep)
 
@@ -428,7 +428,11 @@ def draw_time_distance(result: Transmission, ax, top: float | None = None):
     else:
         ax.set_title('time-distance: where the train stops each part of the source',
                      fontsize='medium')
-        ax.legend(loc='upper left', fontsize='small')
+        # under the whole figure, where it covers nothing; replace the last draw's
+        for legend in list(ax.figure.legends):
+            legend.remove()
+        ax.figure.legend(*ax.get_legend_handles_labels(), loc='outside lower center',
+                         ncols=7, fontsize='small')
 
 
 # -- interactive ------------------------------------------------------------------------
