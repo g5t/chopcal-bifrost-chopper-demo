@@ -268,10 +268,11 @@ def make_axes(figsize=(12, 10)):
 
 def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
          log: bool = False):
-    """Draw one result on `make_axes`'s three axes, replacing what was there.
+    """Draw one result on `make_axes`'s axes, replacing what was there.
 
-    The source is on a linear colour scale, which shows the pulse's shape; `log` shows its
-    reach instead. Returns the colorbar, so that a caller redrawing the same figure can
+    The source and the profiles are on linear scales, which show the pulse's shape; `log`
+    puts the colour scale and both profiles' intensities on log scales, which show its
+    reach instead, down to 1e-4 of each one's peak. Returns the colorbar, so that a caller redrawing the same figure can
     hand it back instead of stacking a new one each time.
     """
     from matplotlib.colors import LogNorm, Normalize
@@ -322,6 +323,8 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     time.set_ylabel('intensity [per ms, arb.]')
     time.set_xlim(a[0], a[-1])
     time.legend(loc='upper right', fontsize='small')
+    if log:
+        _log_intensity(time, result.at_sample_support / step)
 
     wstep = np.diff(w)
     wavelength.stairs(result.by_wavelength_support / wstep, w, color='0.6', linestyle='--',
@@ -338,6 +341,8 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     _energy_axis(top.xaxis, wavelength.get_xlim())
     top.set_xlabel('energy [meV]')
     wavelength.legend(loc='upper right', fontsize='small')
+    if log:
+        _log_intensity(wavelength, result.by_wavelength_support / wstep)
 
     fraction = result.transmitted / result.emitted if result.emitted else 0.0
     text = title + '\n' if title else ''
@@ -357,6 +362,14 @@ def _latest_below(polygon, top):
         if (l0 - top) * (l1 - top) < 0:
             times.append(t0 + (t1 - t0) * (top - l0) / (l1 - l0))
     return max(times, default=0.0)
+
+
+def _log_intensity(ax, values):
+    """A log intensity axis from 1e-4 of the peak of `values` to just above it."""
+    peak = values.max(initial=0.0)
+    if peak > 0:
+        ax.set_yscale('log')
+        ax.set_ylim(peak * 1e-4, peak * 2)
 
 
 def draw_time_distance(result: Transmission, ax, top: float | None = None):
@@ -478,7 +491,7 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
         'psc_speed_max': ToggleButtons(options=[('designed, 196 Hz', 196.0),
                                                 ('substitute, 126 Hz', 126.0)],
                                        value=196.0, description='PSC disks'),
-        'log': Checkbox(value=False, description='log colour scale'),
+        'log': Checkbox(value=False, description='log intensities'),
     }
     for widget in controls.values():
         widget.style, widget.layout, widget.continuous_update = style, wide, False
