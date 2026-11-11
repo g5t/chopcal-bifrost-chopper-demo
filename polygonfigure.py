@@ -1,19 +1,298 @@
-import uuid
-from functools import partial
-from typing import Literal
-import scipp as sc
-from matplotlib.collections import PatchCollection
-from matplotlib.patches import Polygon
-from plopp import backends
-from plopp.graphics import GraphicalView
-from plopp.graphics.bbox import BoundingBox, axis_bounds
+"""BIFROST's source intensity through its chopper train, from chopcal's exact regions.
 
-import matplotlib
+The ESS source BIFROST sees is tabulated by ``tof`` on a fine grid of (wavelength,
+emission time). chopcal builds the region of that plane the six choppers transmit --
+exactly, as convex polygons -- and weights it by how likely each neutron is to get
+through a disc whose edge is still sweeping the beam. Integrating the gridded source over
+that weighted region gives what reaches the sample, by arrival time and by wavelength.
+
+Three layers, so the same numbers serve a notebook and a static picture:
+
+- `transmission` computes everything for one setting, with no plotting;
+- `draw` puts a result on three matplotlib axes;
+- `bifrost_transmitted_phasespace_figure` wires both to ipywidgets controls.
+
+Needs chopcal >= 0.7 (`Region.transmit_weighted`, `beam_aperture(..., at='centre')`) and
+``tof`` for the source distribution.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import lru_cache
+
+import numpy as np
+
+#: The ESS source distributions in ``tof`` are sampled this far from the moderator, and
+#: their emission times are counted there; chopcal measures its paths from the moderator.
+SOURCE_PLANE = 0.05  # m
+#: The pulse-shaping pair and the bandwidth pair each share a housing.
+GROUPS = [0, 0, 1, 2, 3, 3]
+NAMES = ('ps1', 'ps2', 'fo1', 'fo2', 'bw1', 'bw2')
+
+
+@lru_cache(maxsize=4)
+def source_distribution(name: str = 'ess-bifrost'):
+    """The tabulated source, (wavelength, birth_time), as amounts on a fine uniform grid.
+
+    Read with bin-edge coordinates so that it can be rebinned: an amount per cell, spread
+    evenly over it, which is how chopcal reads a gridded source too.
+    """
+    import scipp as sc
+    from tof.facilities import get_source_path
+    data = sc.io.load_hdf5(get_source_path(name))
+    for dim in ('wavelength', 'birth_time'):
+        centres = data.coords[dim]
+        step = centres[1] - centres[0]
+        data.coords[dim] = sc.concat([centres - 0.5 * step, centres[-1:] + 0.5 * step], dim)
+    data.coords['birth_time'] = data.coords['birth_time'].to(unit='s')
+    return data
+
+
+def rebinned(wavelength_edges, time_edges, name: str = 'ess-bifrost') -> np.ndarray:
+    """The source summed into these bins, shaped (time, wavelength) as chopcal wants it."""
+    import scipp as sc
+    data = source_distribution(name)
+    out = data.rebin(wavelength=sc.array(dims=['wavelength'], values=wavelength_edges,
+                                         unit='angstrom'),
+                     birth_time=sc.array(dims=['birth_time'], values=time_edges, unit='s'))
+    return np.ascontiguousarray(out.transpose(['birth_time', 'wavelength']).values)
+
+
+def trains(energy_min: float, shaping_time: float, pulse_shaping_speed_max: float = 196.0,
+           pulse_delay: float = 0.0):
+    """BIFROST's discs twice over, with paths from the source plane rather than the
+    moderator: once with the beam's inner-corner aperture, which bounds where anything
+    gets through, and once with its centre aperture, which sets the ramps a weighted
+    transmission models.
+
+    `pulse_delay` (s) is added to every disc's delay, as ESS's ``BeamPosDly-S`` is when
+    the experiment delays NICOS sets stay as they are: the whole train moves together.
+    chopcal's settings are for none.
+    """
+    import chopcal
+    from chopcal import constants as c
+    from chopcal.lib import Chopper, beam_aperture
+    settings = chopcal.bifrost(energy_min=energy_min, shaping_time=shaping_time,
+                               pulse_shaping_speed_max=pulse_shaping_speed_max)
+    centre = {
+        'narrow': beam_aperture(c.DISK_RADIUS, c.NARROW_SLIT_HEIGHT, c.NARROW_WINDOW_WIDTH,
+                                c.NARROW_WINDOW_HEIGHT, at='centre'),
+        'wide': beam_aperture(c.DISK_RADIUS, c.BANDWIDTH_SLIT_HEIGHT,
+                              c.BANDWIDTH_WINDOW_WIDTH, c.BANDWIDTH_WINDOW_HEIGHT,
+                              at='centre'),
+    }
+
+    def moved(disc, aperture):
+        return Chopper(disc.speed, disc.delay + pulse_delay, disc.beam, list(disc.edges),
+                       disc.path - SOURCE_PLANE, aperture)
+
+    support = [moved(settings[n], settings[n].aperture) for n in NAMES]
+    ramped = [moved(settings[n], centre['wide' if n.startswith('bw') else 'narrow'])
+              for n in NAMES]
+    return support, ramped
+
+
+@dataclass
+class Transmission:
+    """Everything one setting produces, in plain arrays."""
+    wavelength_edges: np.ndarray        # Å
+    time_edges: np.ndarray              # s, at the source plane
+    source: np.ndarray                  # (time, wavelength) amount per bin
+    outline: list                       # transmitted polygons as [(t, λ), ...]
+    arrival_edges: np.ndarray           # s, at the sample
+    at_sample: np.ndarray               # weighted amount per arrival bin
+    at_sample_support: np.ndarray       # the same counting the whole region as open
+    by_wavelength: np.ndarray           # weighted amount per wavelength bin
+    by_wavelength_support: np.ndarray
+    transmitted: float                  # weighted total
+    emitted: float                      # total in the source rectangle
+    psc_speed: float                    # Hz, what the pulse-shaping pair turns at
+
+
+def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
+                 latest_emission=3e-3, wavelength_bin=0.02, time_bin=20e-6,
+                 arrival_bins=400, pulse_shaping_speed_max=196.0, pulse_delay=0.0,
+                 source='ess-bifrost') -> Transmission:
+    """The source in a (wavelength, emission time) rectangle, through BIFROST's train.
+
+    The rectangle is the source polygon chopcal transmits and the extent of the gridded
+    source; the bin sizes set the grid. `pulse_delay` moves every disc together; see
+    `trains`. Times in s, wavelengths in Å.
+    """
+    from chopcal import constants as c
+    from chopcal.lib import Region, wavelength_to_inverse_velocity
+
+    low, high = sorted(wavelength_range)
+    wavelength_edges = np.arange(low, high + 0.5 * wavelength_bin, wavelength_bin)
+    time_edges = np.arange(0.0, latest_emission + 0.5 * time_bin, time_bin)
+    amounts = rebinned(wavelength_edges, time_edges, source)
+
+    per_angstrom = wavelength_to_inverse_velocity(1.0)   # chopper-lib's own conversion
+    inverse_velocities = wavelength_edges * per_angstrom
+    rectangle = Region.rectangle(inverse_velocities[0],
+                                 inverse_velocities[-1] - inverse_velocities[0],
+                                 time_edges[0], time_edges[-1] - time_edges[0])
+    support_train, ramped_train = trains(energy_min, shaping_time, pulse_shaping_speed_max,
+                                         pulse_delay)
+    support = rectangle.transmit(support_train)
+    weighted = rectangle.transmit_weighted(ramped_train, GROUPS)
+
+    distance = c.INSTRUMENT_LENGTH - SOURCE_PLANE
+    if support:
+        reached = [t + distance * u for p in support.polygons for u, t in p.vertices]
+        first, last = min(reached), max(reached)
+        margin = 0.02 * (last - first)
+        arrival_edges = np.linspace(first - margin, last + margin, arrival_bins + 1)
+    else:
+        arrival_edges = np.linspace(0.0, 1 / 14, arrival_bins + 1)
+
+    def arrivals(region):
+        return region.arrivals(amounts, inverse_velocities, time_edges, distance,
+                               arrival_edges).sum(axis=1)
+
+    def by_wavelength(region):
+        return (amounts * region.coverage(inverse_velocities, time_edges)).sum(axis=0)
+
+    outline = [[(t, u / per_angstrom) for u, t in p.vertices] for p in support.polygons]
+    return Transmission(
+        wavelength_edges=wavelength_edges, time_edges=time_edges, source=amounts,
+        outline=outline, arrival_edges=arrival_edges,
+        at_sample=arrivals(weighted), at_sample_support=arrivals(support),
+        by_wavelength=by_wavelength(weighted), by_wavelength_support=by_wavelength(support),
+        transmitted=weighted.integrate(amounts, inverse_velocities, time_edges),
+        emitted=float(amounts.sum()), psc_speed=abs(support_train[0].speed))
+
+
+# -- wavelength and energy --------------------------------------------------------------
+
+def _energy(wavelength):
+    """meV from Å, through chopcal's h^2/2m, safe at the zero matplotlib probes with."""
+    from chopcal import constants as c
+    w = np.asarray(wavelength, dtype=float)
+    with np.errstate(divide='ignore'):
+        return np.where(w > 0, c.H2_OVER_2M / np.where(w > 0, w, 1.0) ** 2, np.inf)
+
+
+def _wavelength(energy):
+    from chopcal import constants as c
+    e = np.asarray(energy, dtype=float)
+    with np.errstate(divide='ignore'):
+        return np.where(e > 0, np.sqrt(c.H2_OVER_2M / np.where(e > 0, e, 1.0)), np.inf)
+
+
+#: Energies worth a tick, meV: round numbers, sparse where the scale compresses them.
+ENERGY_TICKS = (1, 1.5, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30, 50, 80, 120, 200)
+
+
+def _energy_axis(secondary, wavelengths):
+    """Label an energy axis twinned to a wavelength one, at round energies only."""
+    low, high = sorted(_energy(np.asarray(wavelengths, dtype=float)))
+    ticks = [e for e in ENERGY_TICKS if low <= e <= high]
+    secondary.set_ticks(ticks, labels=[f'{e:g}' for e in ticks])
+    return secondary
+
+
+# -- drawing ----------------------------------------------------------------------------
+
+def make_axes(figsize=(12, 6)):
+    """A figure with the source plane on the left and two profiles stacked on the right."""
+    import matplotlib.pyplot as plt
+    fig = plt.figure(figsize=figsize, layout='constrained')
+    grid = fig.add_gridspec(2, 2, width_ratios=(1.15, 1))
+    left = fig.add_subplot(grid[:, 0])
+    time = fig.add_subplot(grid[0, 1])
+    wavelength = fig.add_subplot(grid[1, 1])
+    return fig, (left, time, wavelength)
+
+
+def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
+         log: bool = False):
+    """Draw one result on `make_axes`'s three axes, replacing what was there.
+
+    The source is on a linear colour scale, which shows the pulse's shape; `log` shows its
+    reach instead. Returns the colorbar, so that a caller redrawing the same figure can
+    hand it back instead of stacking a new one each time.
+    """
+    from matplotlib.colors import LogNorm, Normalize
+    from matplotlib.patches import Polygon
+    left, time, wavelength = axes
+    for ax in axes:
+        ax.clear()
+        for secondary in list(getattr(ax, 'child_axes', [])):
+            secondary.remove()
+
+    w, t = result.wavelength_edges, result.time_edges
+    density = result.source / np.outer(np.diff(t * 1e3), np.diff(w))   # per ms per Å
+    positive = density[density > 0]
+    if not positive.size:
+        norm = None
+    elif log:
+        norm = LogNorm(vmin=positive.max() * 1e-4, vmax=positive.max())
+    else:
+        norm = Normalize(vmin=0.0, vmax=positive.max())
+    mesh = left.pcolormesh(t * 1e3, w, density.T, norm=norm, cmap='viridis',
+                           shading='flat', rasterized=True)
+    for polygon in result.outline:
+        left.add_patch(Polygon([(a * 1e3, b) for a, b in polygon], closed=True,
+                               fill=False, edgecolor='white', linewidth=1.6))
+        left.add_patch(Polygon([(a * 1e3, b) for a, b in polygon], closed=True,
+                               fill=False, edgecolor='crimson', linewidth=0.9))
+    left.set_xlim(t[0] * 1e3, t[-1] * 1e3)
+    left.set_ylim(w[0], w[-1])
+    left.set_xlabel('emission time at the source [ms]')
+    left.set_ylabel('wavelength [Å]')
+    energy = left.secondary_yaxis('right', functions=(_energy, _wavelength))
+    _energy_axis(energy.yaxis, (w[0], w[-1]))
+    energy.set_ylabel('energy [meV]')
+    left.set_title('source, and the region the train transmits')
+    if colorbar is None:
+        colorbar = left.figure.colorbar(mesh, ax=left, location='bottom', shrink=0.8,
+                                        label='source intensity [per ms per Å, arb.]')
+    else:
+        colorbar.update_normal(mesh)
+
+    a = result.arrival_edges * 1e3
+    step = np.diff(a)
+    time.stairs(result.at_sample_support / step, a, color='0.6', linestyle='--',
+                label='whole region open')
+    time.stairs(result.at_sample / step, a, color='C0', linewidth=1.5,
+                label='weighted by transmission')
+    time.set_xlabel('arrival time at the sample [ms]')
+    time.set_ylabel('intensity [per ms, arb.]')
+    time.set_xlim(a[0], a[-1])
+    time.legend(loc='upper right', fontsize='small')
+
+    wstep = np.diff(w)
+    wavelength.stairs(result.by_wavelength_support / wstep, w, color='0.6', linestyle='--',
+                      label='whole region open')
+    wavelength.stairs(result.by_wavelength / wstep, w, color='C1', linewidth=1.5,
+                      label='weighted by transmission')
+    reached = np.nonzero(result.by_wavelength_support)[0]
+    if reached.size:
+        lo, hi = w[max(reached[0] - 2, 0)], w[min(reached[-1] + 3, len(w) - 1)]
+        wavelength.set_xlim(lo, hi)
+    wavelength.set_xlabel('wavelength [Å]')
+    wavelength.set_ylabel('intensity [per Å, arb.]')
+    top = wavelength.secondary_xaxis('top', functions=(_energy, _wavelength))
+    _energy_axis(top.xaxis, wavelength.get_xlim())
+    top.set_xlabel('energy [meV]')
+    wavelength.legend(loc='upper right', fontsize='small')
+
+    fraction = result.transmitted / result.emitted if result.emitted else 0.0
+    text = title + '\n' if title else ''
+    time.set_title(f'{text}{fraction:.3%} of the source rectangle reaches the sample',
+                   fontsize='medium')
+    return colorbar
+
+
+# -- interactive ------------------------------------------------------------------------
 
 _IPYMPL = {'widget', 'ipympl', 'module://ipympl.backend_nbagg'}
-  
+
+
 def ipympl_active() -> bool:
     """True if ipympl is the current backend. No side effects, no resolution."""
+    import matplotlib
     try:
         name = matplotlib.get_backend(auto_select=False)   # mpl >= 3.9
     except TypeError:                                       # older matplotlib
@@ -31,219 +310,80 @@ def ensure_widget_backend(quiet: bool = False) -> bool:
     except ImportError:
         return False
     ip = get_ipython()
-    if ip is None:              # plain python, not IPython
+    if ip is None:
         return False
     if ipympl_active():
         return True
-    ip.run_line_magic('matplotlib', 'widget')   # or: ip.enable_matplotlib('widget')
+    ip.run_line_magic('matplotlib', 'widget')
     if not quiet:
         print('[polygonfigure] enabled %matplotlib widget')
     return True
 
 
-class Patch:
-    """One matplotlib patch per element of a 1-D DataArray"""
-    
-    def __init__(self, *, canvas, data, uid=None, artist_number=0,
-                 colormapper=None, mask_color=None, cbar=False,
-                 x='x', y='y', n='n', **kwargs):
-        self.uid = uid or uuid.uuid4().hex
-        self._ax = canvas.ax
-        self._data, self._x, self._y, self._n = data, x, y, n
-        self._colormapper = colormapper
-        self.label = data.name if not cbar else None
-        self._coll = PatchCollection(
-            self._make_patches(data), label=self.label,
-            **({} if cbar else {'facecolor': f'C{artist_number}'}), **kwargs)
-        self._ax.add_collection(self._coll)
-        if colormapper is not None:
-            colormapper.add_artist(self.uid, self)
-            
-    def _make_patches(self, data):
-        x = data.coords[self._x].values
-        y = data.coords[self._y].values
-        n = data.coords[self._n].values
-        return [
-            Polygon(
-                [(a, b) for a, b in zip(x[i==n], y[i==n])]) for i in range(1+max(n))
-        ]
- 
-    def update(self, new_values: sc.DataArray) -> None:
-        self._data = new_values
-        self._coll.set_paths(self._make_patches(new_values))
-        if self._colormapper is not None:
-            self._update_colors()
+def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
+    from ipywidgets import (Checkbox, FloatRangeSlider, FloatSlider, HBox, Label, Layout,
+                            ToggleButtons, VBox)
+    import matplotlib.pyplot as plt
 
-    def bbox(self, xscale: Literal['linear', 'log'], yscale, **ignored):
-        return BoundingBox(**axis_bounds(('xmin', 'xmax'), self._data.coords[self._x], xscale),
-                           **axis_bounds(('ymin', 'ymax'), self._data.coords[self._y], yscale))
+    style = {'description_width': '9em'}
+    wide = Layout(width='26em')
+    controls = {
+        'energy_min': FloatSlider(value=ei_min, min=1.0, max=20.0, step=0.1,
+                                  description='lowest energy [meV]'),
+        'shaping_time': FloatSlider(value=t_psc, min=0.05, max=2.0, step=0.05,
+                                    description='shaping time [ms]'),
+        'latest_emission': FloatSlider(value=3.0, min=0.5, max=6.0, step=0.1,
+                                       description='last emission [ms]'),
+        'wavelength_range': FloatRangeSlider(value=(1.0, 6.0), min=0.2, max=19.9, step=0.1,
+                                             description='wavelengths [Å]'),
+        'time_bin': FloatSlider(value=20.0, min=6.0, max=200.0, step=2.0,
+                                description='time bin [µs]'),
+        'wavelength_bin': FloatSlider(value=0.02, min=0.02, max=0.5, step=0.01,
+                                      description='wavelength bin [Å]'),
+        'pulse_delay': FloatSlider(value=0.0, min=-1000.0, max=1000.0, step=10.0,
+                                   description='pulse delay [µs]'),
+        'psc_speed_max': ToggleButtons(options=[('designed, 196 Hz', 196.0),
+                                                ('substitute, 126 Hz', 126.0)],
+                                       value=196.0, description='PSC disks'),
+        'log': Checkbox(value=False, description='log colour scale'),
+    }
+    for widget in controls.values():
+        widget.style, widget.layout, widget.continuous_update = style, wide, False
+    controls['psc_speed_max'].style.button_width = '10em'
 
-    def remove(self) -> None:
-        self._coll.remove()
-        if self._colormapper is not None:
-            self._colormapper.remove_artist(self.uid)
+    with plt.ioff():
+        fig, axes = make_axes()
+    status = Label()
+    state = {'colorbar': None}
 
-    @property                      # these two only needed when cbar=True
-    def data(self): return self._data
-    def notify_artist(self, message): self._update_colors()
-    def _update_colors(self): self._coll.set_facecolors(self._colormapper.rgba(self.data))
+    def update(*_):
+        v = {k: w.value for k, w in controls.items()}
+        result = transmission(energy_min=v['energy_min'], shaping_time=v['shaping_time'] * 1e-3,
+                              wavelength_range=v['wavelength_range'],
+                              latest_emission=v['latest_emission'] * 1e-3,
+                              wavelength_bin=v['wavelength_bin'],
+                              time_bin=v['time_bin'] * 1e-6,
+                              pulse_delay=v['pulse_delay'] * 1e-6,
+                              pulse_shaping_speed_max=v['psc_speed_max'])
+        state['colorbar'] = draw(result, axes, colorbar=state['colorbar'], log=v['log'])
+        fig.canvas.draw_idle()
+        status.value = (f'{result.source.shape[1]} x {result.source.shape[0]} bins; '
+                        f'{len(result.outline)} transmitted polygon(s); PSC at '
+                        f'{result.psc_speed:g} Hz')
 
-
-def patchfigure(*nodes, x='x', y='y', cbar=False, **kwargs):
-    view_maker = partial(GraphicalView, dims={'x': x, 'y': y},
-                         canvas_maker=backends.get(group='2d', name='canvas'),
-                         artist_maker=Patch, colormapper=cbar)
-    return backends.get(group='2d', name='figure')(view_maker, *nodes, x=x, y=y, cbar=cbar, **kwargs)
-
-
-class WavelengthEnergyPatch(Patch):
-    def __init__(self, **kwargs):
-        from matplotlib.pyplot import setp
-        super().__init__(**kwargs)
-        setp(
-            self._ax.secondary_yaxis('right', (bare_wavelength_to_energy, bare_energy_to_wavelength)), 
-            ylabel=r'E [meV]'
-        )
+    for widget in controls.values():
+        widget.observe(update, names='value')
+    update()
+    return HBox([fig.canvas, VBox([*controls.values(), status])])
 
 
-def wavelength_energy_patchfigure(*nodes, x='x', y='y', cbar=False, **kwargs):
-    view_maker = partial(GraphicalView, dims={'x': x, 'y': y},
-                         canvas_maker=backends.get(group='2d', name='canvas'),
-                         artist_maker=WavelengthEnergyPatch, colormapper=cbar)
-    return backends.get(group='2d', name='figure')(view_maker, *nodes, x=x, y=y, cbar=cbar, **kwargs)
+def bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
+    """The interactive figure: the source and the transmitted region on the left, what
+    reaches the sample by arrival time and by wavelength on the right.
 
-
-def border_to_patch(xy: list[list[tuple[float, float]|list[float]]], x: dict | None = None, y: dict | None = None, dim: str | None = None):
-    from scipp import array, concat, ones, DataArray
-    if dim is None:
-        dim = 'points'
-    if x is None:
-        x = {}
-    if y is None:
-        y = {}
-        
-    xs = concat([array(values=[x for x, _ in border], dims=[dim], unit=x.get('unit')) for border in xy], dim=dim)
-    ys = concat([array(values=[y for _, y in border], dims=[dim], unit=y.get('unit')) for border in xy], dim=dim)
-    ns = concat([ones(sizes={dim: len(border)}, dtype='int') * index for index, border in enumerate(xy)], dim=dim)
-    
-    return DataArray(ones(sizes={dim: sum(len(border) for border in xy)}), coords={x.get('name', 'x'): xs, y.get('name', 'y'): ys, 'n': ns})
-    
-
-
-def phase_to_patch(obj, translator=None, **kwargs):
-    if translator is None:
-        translator = lambda x: x
-    return border_to_patch([translator(polygon.vertices) for polygon in obj.polygons], **kwargs)
-
-
-def invv_time_to_time_wavelength(points):
-    from scipp import array
-    from scipp.constants import neutron_mass, Planck
-    invv = array(values=[i for i, _ in points], unit='s/m', dims=['point'])
-    wavelength = (Planck / neutron_mass * invv).to(unit='angstrom').values
-    t = [i for _, i in points]
-    return [(t, w) for t, w in zip(t, wavelength)]
-
-
-def invv_time_to_time_wavelength_at_sample(points):
-    # we want to 'forward' (1/v, t) from the source position to the sample position
-    #   v = d / t  ===>  t = d / v
-    from scipp import array, scalar
-    from scipp.constants import neutron_mass, Planck
-    SOURCE_TO_SAMPLE = scalar(162.0, unit='m')
-    invv = array(values=[i for i, _ in points], unit='s/m', dims=['point'])
-    wavelength = (Planck / neutron_mass * invv).to(unit='angstrom')
-    t = array(values=[i for _, i in points], unit='s', dims=['point'])
-    t_sample = t + SOURCE_TO_SAMPLE * invv
-    return [(t, w) for t, w in zip(t_sample.values, wavelength.values)]    
-
-
-def axes(array):
-    return [f'axis_{i}' for i in range(array.ndim)]
-
-    
-def bare_wavelength_to_energy(wavelength):
-    from scipp.constants import neutron_mass, Planck
-    from scipp import array
-    w = array(values=wavelength, unit='angstrom', dims=axes(wavelength))
-    en = (Planck * Planck / 2 / neutron_mass / w / w).to(unit='meV')
-    return en.values
-
-def bare_energy_to_wavelength(energy):
-    from scipp.constants import neutron_mass, Planck
-    from scipp import array, sqrt
-    en = array(values=energy, unit='meV', dims=axes(energy))
-    wavelength = (Planck / sqrt(en * 2 * neutron_mass)).to(unit='angstrom')
-    return wavelength.values
-
-
-def region_obj(wavelength_limits_angstrom, latest_emission_msec):
-    from chopcal.lib import Region
-    return Region.from_wavelengths(min(wavelength_limits_angstrom), max(wavelength_limits_angstrom), 0., latest_emission_msec/1000.)
-
-    
-def bifrost_train_list(minimum_energy_meV, pulse_shaping_time_msec):
-    from chopcal import bifrost
-    values = bifrost(energy_min=minimum_energy_meV, shaping_time=pulse_shaping_time_msec / 1000.)
-    return [values[x] for x in ('ps1', 'ps2', 'fo1', 'fo2', 'bw1', 'bw2')]
-
-    
-def bifrost_transmitted(source, train_list):
-    return source.transmit(train_list)
-
-    
-def source_plot(source_polygons):
-    return phase_to_patch(source_polygons, translator=invv_time_to_time_wavelength, x={'name': 'time', 'unit': 'sec'}, y={'name': 'wavelength', 'unit': 'angstrom'})
-
-
-def source_forwarded_plot(source_polygons):
-    return phase_to_patch(source_polygons, translator=invv_time_to_time_wavelength_at_sample, x={'name': 'time', 'unit': 'sec'}, y={'name': 'wavelength', 'unit': 'angstrom'})
-
-    
-def transmitted_plot(transmitted_polygons):
-    return phase_to_patch(transmitted_polygons, translator=invv_time_to_time_wavelength, x={'name': 'time', 'unit': 'sec'}, y={'name': 'wavelength', 'unit': 'angstrom'})
-
-
-def bifrost_forwarded_plot(transmitted_polygons):
-    return phase_to_patch(transmitted_polygons, translator=invv_time_to_time_wavelength_at_sample, x={'name': 'time', 'unit': 'sec'}, y={'name': 'wavelength', 'unit': 'angstrom'})
-    
-
-
-def _bifrost_transmitted_phasespace_figure(ei_min=2.0, t_psc=0.1):
-    from ipywidgets import FloatSlider, FloatRangeSlider, HBox, VBox
-    from plopp import widget_node, Node
-    
-    t_last = FloatSlider(value=3.0, min=0, max=int(1/14*1000), description=r'$t_\text{last}$ [msec]')
-    w_range = FloatRangeSlider(value=(2.0, 8.0), min=0.1, max=50., description=r'$\Delta\lambda$ [Å]')
-    ei_min = FloatSlider(value=ei_min, min=0.1, max=50., description=r'$E$ [meV]')
-    w_max = FloatSlider(value=5, min=0.1, max=10., description=r'$\lambda_\text{max}$ [Å]')
-    t_psc = FloatSlider(value=t_psc, min=0.1, max=int(1/14*1000*175/360), description=r'$t_\text{psc}$ [msec]')
-
-    t_last_node = widget_node(t_last)
-    w_range_node = widget_node(w_range)
-    region_node = Node(region_obj, wavelength_limits_angstrom=w_range_node, latest_emission_msec=t_last_node)
-    
-    ei_min_node = widget_node(ei_min)
-    t_psi_node = widget_node(t_psc)
-    bifrost_train_node = Node(bifrost_train_list, minimum_energy_meV=ei_min_node, pulse_shaping_time_msec=t_psi_node)
-    
-    bifrost_transmitted_node = Node(bifrost_transmitted, source=region_node, train_list=bifrost_train_node)
-    fig_source_node = Node(source_plot, source_polygons=region_node)
-    fig_transmitted_node = Node(transmitted_plot, transmitted_polygons=bifrost_transmitted_node)
-    
-    fig = wavelength_energy_patchfigure(fig_source_node, fig_transmitted_node, x='time', y='wavelength')
-
-    fig_forward_source_node = Node(source_forwarded_plot, source_polygons=region_node)
-    fig_forward_transmitted_node = Node(bifrost_forwarded_plot, transmitted_polygons=bifrost_transmitted_node)
-
-    fig_forward = wavelength_energy_patchfigure(fig_forward_source_node, fig_forward_transmitted_node, x='time', y='wavelength')
-
-    return HBox([fig, fig_forward, VBox([t_last, w_range, ei_min, t_psc])])
-
-
-def bifrost_transmitted_phasespace_figure(ei_min=2.0, t_psc=0.1):
+    `ei_min` is the lowest incident energy chopcal places the band at, in meV, and `t_psc`
+    the pulse-shaping burst, in ms.
+    """
     if ensure_widget_backend():
         return _bifrost_transmitted_phasespace_figure(ei_min=ei_min, t_psc=t_psc)
-    else:
-        raise RuntimeError('Interactive mode needed -- please install IPython and ipympl')
-
+    raise RuntimeError('Interactive mode needed -- please install IPython and ipympl')
