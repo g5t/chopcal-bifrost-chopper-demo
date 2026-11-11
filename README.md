@@ -9,6 +9,8 @@ computed exactly by [`chopcal`](https://pypi.org/project/chopcal/).
 - **Right:** what reaches the sample, by arrival time and by wavelength (energy along the
   top). Dashed curves count the whole transmitted region as open; solid ones weight it by
   how likely each neutron is to get through while a disc's edge is still sweeping the beam.
+- **Below:** a time-distance diagram, showing which chopper stops each part of the source
+  and what reaches the sample, over the whole instrument and near the source.
 
 The controls set the lowest energy and pulse-shaping time chopcal places the band at, the
 source rectangle and the grid it is binned on, a pulse delay that moves every disc
@@ -51,7 +53,10 @@ The first run downloads the BIFROST source distribution (about 8 MB) into `tof`'
   - `transmission(...)` computes one setting and returns plain arrays, no plotting;
   - `make_axes()` and `draw(result, axes)` draw a result with matplotlib, for a script
     or a saved picture;
+  - `draw_time_distance(result, ax)` draws only the time-distance diagram;
   - `bifrost_transmitted_phasespace_figure(...)` wires both to ipywidgets controls.
+
+`python polygonfigure.py` runs its self-checks.
 
 ## Without Jupyter
 

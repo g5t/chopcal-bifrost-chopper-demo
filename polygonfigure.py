@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+from itertools import combinations
 
 import numpy as np
 
@@ -107,6 +108,27 @@ class Transmission:
     transmitted: float                  # weighted total
     emitted: float                      # total in the source rectangle
     psc_speed: float                    # Hz, what the pulse-shaping pair turns at
+    #: (name, distance from the moderator in m) for each chopper, then the sample
+    positions: list
+    #: for each entry of `positions`, the (time, distance) outlines of the neutrons that
+    #: got through every chopper before it, swept from the source plane up to it
+    stages: list
+
+
+def swept(vertices, l0: float, l1: float):
+    """The (t, L) outline a polygon of (u, t) sweeps between distances l0 and l1.
+
+    At distance L its neutrons span the times t + L u over its vertices. The latest and
+    earliest of those are piecewise linear in L, bending only where two vertices swap, so
+    evaluating at those crossings gives the outline exactly.
+    """
+    ls = {l0, l1}
+    for (ua, ta), (ub, tb) in combinations(vertices, 2):
+        if ua != ub and l0 < (tb - ta) / (ua - ub) < l1:
+            ls.add((tb - ta) / (ua - ub))
+    ls = sorted(ls)
+    times = np.array([[t + l * u for u, t in vertices] for l in ls])
+    return [*zip(times.max(axis=1), ls), *zip(times.min(axis=1)[::-1], ls[::-1])]
 
 
 def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
@@ -154,13 +176,24 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
         return (amounts * region.coverage(inverse_velocities, time_edges)).sum(axis=0)
 
     outline = [[(t, u / per_angstrom) for u, t in p.vertices] for p in support.polygons]
+
+    # what gets through the first k choppers, swept from the source plane to the next one
+    stops = [(n, d.path) for n, d in zip(NAMES, support_train)] + [('sample', distance)]
+    stages, through = [], rectangle
+    for k, (_, stop) in enumerate(stops):
+        if k:
+            through = through.transmit([support_train[k - 1]])
+        stages.append([[(t, l + SOURCE_PLANE) for t, l in swept(p.vertices, 0.0, stop)]
+                       for p in through.polygons])
+    positions = [(n, stop + SOURCE_PLANE) for n, stop in stops]
     return Transmission(
         wavelength_edges=wavelength_edges, time_edges=time_edges, source=amounts,
         outline=outline, arrival_edges=arrival_edges,
         at_sample=arrivals(weighted), at_sample_support=arrivals(support),
         by_wavelength=by_wavelength(weighted), by_wavelength_support=by_wavelength(support),
         transmitted=weighted.integrate(amounts, inverse_velocities, time_edges),
-        emitted=float(amounts.sum()), psc_speed=abs(support_train[0].speed))
+        emitted=float(amounts.sum()), psc_speed=abs(support_train[0].speed),
+        positions=positions, stages=stages)
 
 
 # -- wavelength and energy --------------------------------------------------------------
@@ -194,15 +227,18 @@ def _energy_axis(secondary, wavelengths):
 
 # -- drawing ----------------------------------------------------------------------------
 
-def make_axes(figsize=(12, 6)):
-    """A figure with the source plane on the left and two profiles stacked on the right."""
+def make_axes(figsize=(12, 10)):
+    """The source plane on the left and two profiles stacked on the right, above a
+    time-distance diagram of the whole instrument and one of its first choppers."""
     import matplotlib.pyplot as plt
     fig = plt.figure(figsize=figsize, layout='constrained')
-    grid = fig.add_gridspec(2, 2, width_ratios=(1.15, 1))
-    left = fig.add_subplot(grid[:, 0])
+    grid = fig.add_gridspec(3, 2, width_ratios=(1.15, 1), height_ratios=(1, 1, 1.3))
+    left = fig.add_subplot(grid[:2, 0])
     time = fig.add_subplot(grid[0, 1])
     wavelength = fig.add_subplot(grid[1, 1])
-    return fig, (left, time, wavelength)
+    distance = fig.add_subplot(grid[2, 0])
+    near = fig.add_subplot(grid[2, 1])
+    return fig, (left, time, wavelength, distance, near)
 
 
 def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
@@ -215,7 +251,7 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     """
     from matplotlib.colors import LogNorm, Normalize
     from matplotlib.patches import Polygon
-    left, time, wavelength = axes
+    left, time, wavelength, *rest = axes
     for ax in axes:
         ax.clear()
         for secondary in list(getattr(ax, 'child_axes', [])):
@@ -282,7 +318,67 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     text = title + '\n' if title else ''
     time.set_title(f'{text}{fraction:.3%} of the source rectangle reaches the sample',
                    fontsize='medium')
+    # the whole instrument, then the choppers in its first quarter, where most is stopped
+    near = [at for _, at in result.positions if at < 0.25 * result.positions[-1][1]]
+    for ax, top in zip(rest, (None, 1.15 * max(near))):
+        draw_time_distance(result, ax, top)
     return colorbar
+
+
+def _latest_below(polygon, top):
+    """The latest time on a (t, L) outline at or below distance `top`."""
+    times = [t for t, l in polygon if l <= top]
+    for (t0, l0), (t1, l1) in zip(polygon, polygon[1:] + polygon[:1]):
+        if (l0 - top) * (l1 - top) < 0:
+            times.append(t0 + (t1 - t0) * (top - l0) / (l1 - l0))
+    return max(times, default=0.0)
+
+
+def draw_time_distance(result: Transmission, ax, top: float | None = None):
+    """Where the transmitted neutrons are, and where the rest stop.
+
+    Each band is what got through every chopper before one, from the source to that
+    chopper; later bands are drawn over earlier ones, so what is left showing of a band is
+    what that chopper stops. The last band, to the sample, is the outlined region.
+    `top` (m) shows only the instrument up to there.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Polygon
+    stopped = plt.get_cmap('YlGnBu')(np.linspace(0.25, 0.85, len(result.stages) - 1))
+    colours = [*stopped, 'crimson']
+    for (name, _), polygons, colour in zip(result.positions, result.stages, colours):
+        label = 'reaches the sample' if name == 'sample' else f'stopped by {name}'
+        for polygon in polygons:
+            ax.add_patch(Polygon([(t * 1e3, l) for t, l in polygon], closed=True,
+                                 facecolor=colour, edgecolor='none', label=label))
+            label = None
+    top = result.positions[-1][1] if top is None else top
+    latest = max((_latest_below(p, top) for polygons in result.stages for p in polygons),
+                 default=1 / 14)
+    # one line and name per housing: the pairs are centimetres apart
+    housings = []
+    for name, at in result.positions:
+        if at > top:
+            break
+        if housings and at - housings[-1][1] < 0.04 * top:   # labels would overlap
+            housings[-1][0].append(name)
+        else:
+            housings.append(([name], at))
+    for names, at in housings:
+        ax.axhline(at, color='0.4', linewidth=0.6)
+        ax.annotate('/'.join(names), (1.0, at), xycoords=('axes fraction', 'data'),
+                    xytext=(4, 0), textcoords='offset points', va='center',
+                    fontsize='small')
+    ax.set_xlim(0.0, 1.03 * latest * 1e3)
+    ax.set_ylim(0.0, 1.03 * top)
+    ax.set_xlabel('time [ms]')
+    ax.set_ylabel('distance from the moderator [m]')
+    if top < result.positions[-1][1]:
+        ax.set_title('... and near the source', fontsize='medium')
+    else:
+        ax.set_title('time-distance: where the train stops each part of the source',
+                     fontsize='medium')
+        ax.legend(loc='upper left', fontsize='small')
 
 
 # -- interactive ------------------------------------------------------------------------
@@ -387,3 +483,20 @@ def bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
     if ensure_widget_backend():
         return _bifrost_transmitted_phasespace_figure(ei_min=ei_min, t_psc=t_psc)
     raise RuntimeError('Interactive mode needed -- please install IPython and ipympl')
+
+
+if __name__ == '__main__':
+    # `swept` is exact: at every distance its band spans the times its vertices reach
+    square = [(1e-3, 2e-3), (3e-3, 0.0), (3e-3, 1e-3), (2e-3, 3e-3)]   # bends at 1 m, 2 m
+    band = np.array(swept(square, 0.0, 20.0))
+    latest, earliest = band[:len(band) // 2], band[len(band) // 2:][::-1]
+    for distance in np.linspace(0.0, 20.0, 41):
+        reached = [t + distance * u for u, t in square]
+        assert np.isclose(np.interp(distance, latest[:, 1], latest[:, 0]), max(reached))
+        assert np.isclose(np.interp(distance, earliest[:, 1], earliest[:, 0]), min(reached))
+    # the stages end with exactly what the train transmits, the outlined region
+    result = transmission()
+    assert len(result.stages[-1]) == len(result.outline)
+    last = np.array(result.stages[-1][0])
+    assert np.isclose(last[:, 0].min(), min(t for t, _ in result.outline[0]))
+    print('ok')
