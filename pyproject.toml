@@ -1,0 +1,19 @@
+[project]
+name = "chopcal-bifrost-chopper-demo"
+version = "0.1.0"
+description = "BIFROST's source through its chopper train, interactively, with chopcal"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "chopcal>=0.7",   # Region.transmit_weighted, beam_aperture(..., at='centre')
+    "tof",            # the ESS source library
+    "scipp",
+    "numpy",
+    "matplotlib",
+    "ipympl",
+    "ipywidgets",
+    "jupyterlab",
+]
+
+[tool.uv]
+package = false
