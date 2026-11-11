@@ -27,6 +27,9 @@ import numpy as np
 #: The ESS source distributions in ``tof`` are sampled this far from the moderator, and
 #: their emission times are counted there; chopcal measures its paths from the moderator.
 SOURCE_PLANE = 0.05  # m
+#: The fastest the designed pulse-shaping disks may turn, Hz: the 15th harmonic of 14 Hz.
+#: chopcal's own default is 196 Hz. The 126 Hz substitutes installed now are the 9th.
+PSC_SPEED_MAX = 210.0
 #: The pulse-shaping pair and the bandwidth pair each share a housing.
 GROUPS = [0, 0, 1, 2, 3, 3]
 NAMES = ('ps1', 'ps2', 'fo1', 'fo2', 'bw1', 'bw2')
@@ -60,7 +63,8 @@ def rebinned(wavelength_edges, time_edges, name: str = 'ess-bifrost') -> np.ndar
     return np.ascontiguousarray(out.transpose(['birth_time', 'wavelength']).values)
 
 
-def trains(energy_min: float, shaping_time: float, pulse_shaping_speed_max: float = 196.0,
+def trains(energy_min: float, shaping_time: float,
+           pulse_shaping_speed_max: float = PSC_SPEED_MAX,
            pulse_delay: float = 0.0):
     """BIFROST's discs twice over, with paths from the source plane rather than the
     moderator: once with the beam's inner-corner aperture, which bounds where anything
@@ -155,7 +159,7 @@ def swept(vertices, l0: float, l1: float):
 
 def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
                  latest_emission=3e-3, wavelength_bin=0.02, time_bin=20e-6,
-                 arrival_bins=400, pulse_shaping_speed_max=196.0, pulse_delay=0.0,
+                 arrival_bins=400, pulse_shaping_speed_max=PSC_SPEED_MAX, pulse_delay=0.0,
                  source='ess-bifrost') -> Transmission:
     """The source in a (wavelength, emission time) rectangle, through BIFROST's train.
 
@@ -472,7 +476,7 @@ def ensure_widget_backend(quiet: bool = False) -> bool:
 
 def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
     from ipywidgets import (Checkbox, FloatRangeSlider, FloatSlider, HBox, Label, Layout,
-                            ToggleButtons, VBox)
+                            SelectionSlider, VBox)
     import matplotlib.pyplot as plt
 
     style = {'description_width': '9em'}
@@ -480,7 +484,7 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
     controls = {
         'energy_min': FloatSlider(value=ei_min, min=1.0, max=20.0, step=0.1,
                                   description='lowest energy [meV]'),
-        'shaping_time': FloatSlider(value=t_psc, min=0.05, max=2.0, step=0.05,
+        'shaping_time': FloatSlider(value=t_psc, min=0.05, max=4.0, step=0.05,
                                     description='shaping time [ms]'),
         'latest_emission': FloatSlider(value=3.0, min=0.5, max=12.0, step=0.1,
                                        description='last emission [ms]'),
@@ -492,18 +496,19 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                                       description='wavelength bin [Å]'),
         'pulse_delay': FloatSlider(value=0.0, min=-1000.0, max=1000.0, step=10.0,
                                    description='pulse delay [µs]'),
-        'psc_speed_max': ToggleButtons(options=[('designed, 196 Hz', 196.0),
-                                                ('substitute, 126 Hz', 126.0)],
-                                       value=196.0, description='PSC disks'),
+        # the disks turn at a harmonic of 14 Hz, so their limit is one too
+        'psc_speed_max': SelectionSlider(options=[(f'{14 * n} Hz', 14.0 * n)
+                                                  for n in range(1, 16)],
+                                         value=PSC_SPEED_MAX, description='PSC limit'),
         'log': Checkbox(value=False, description='log intensities'),
     }
     for widget in controls.values():
         widget.style, widget.layout, widget.continuous_update = style, wide, False
-    controls['psc_speed_max'].style.button_width = '10em'
 
     with plt.ioff():
         fig, axes = make_axes()
     status = Label()
+    psc = Label()   # what chopcal picked: the fastest harmonic the burst allows
     state = {'colorbar': None}
 
     def update(*_):
@@ -518,13 +523,17 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
         state['colorbar'] = draw(result, axes, colorbar=state['colorbar'], log=v['log'])
         fig.canvas.draw_idle()
         status.value = (f'{result.source.shape[1]} x {result.source.shape[0]} bins; '
-                        f'{len(result.outline)} transmitted polygon(s); PSC at '
-                        f'{result.psc_speed:g} Hz')
+                        f'{len(result.outline)} transmitted polygon(s)')
+        slower = (' -- slower than the limit, for a burst this long'
+                  if result.psc_speed < v['psc_speed_max'] else '')
+        psc.value = f'PSC turns at {result.psc_speed:g} Hz{slower}'
 
     for widget in controls.values():
         widget.observe(update, names='value')
     update()
-    return HBox([fig.canvas, VBox([*controls.values(), status])])
+    widgets = list(controls.values())
+    widgets.insert(widgets.index(controls['psc_speed_max']) + 1, psc)
+    return HBox([fig.canvas, VBox([*widgets, status])])
 
 
 def bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):

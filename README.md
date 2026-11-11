@@ -15,8 +15,10 @@ computed exactly by [`chopcal`](https://pypi.org/project/chopcal/).
 
 The controls set the lowest energy and pulse-shaping time chopcal places the band at, the
 source rectangle and the grid it is binned on, a pulse delay that moves every disc
-together (as ESS's `BeamPosDly-S` does), and whether the pulse-shaping disks are the
-designed 196 Hz ones or the 126 Hz substitutes installed now.
+together (as ESS's `BeamPosDly-S` does), and the fastest the pulse-shaping disks may turn,
+as a harmonic of 14 Hz: the designed disks are rated to 210 Hz, the substitutes installed
+now to 126 Hz. The speed chopcal picks, which a long burst can make slower, is shown under
+that control.
 
 A static version of this figure is on the chopcal documentation page
 *See BIFROST's source through its train*.
