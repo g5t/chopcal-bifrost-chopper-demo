@@ -592,7 +592,7 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
     # one delay per disc, following chopcal until frozen, and free to move by hand until
     # one of chopcal's own inputs changes; ranges cover chopcal over these controls' ranges
     # and widen if chopcal ever goes beyond them
-    delays = {n: FloatSlider(value=0.0, min=lo, max=hi, step=0.001, readout_format='.3f',
+    delays = {n: FloatSlider(value=0.0, min=lo, max=hi, step=0.01, readout_format='.2f',
                              description=f'{n} delay [ms]', continuous_update=False,
                              style=style, layout=Layout(width='22em'))
               for n, (lo, hi) in DELAY_RANGES_MS.items()}
