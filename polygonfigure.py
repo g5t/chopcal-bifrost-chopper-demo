@@ -320,8 +320,8 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
          log: bool = False, guide: bool = False):
     """Draw one result on `make_axes`'s axes, replacing what was there.
 
-    `guide` shows the source through the real guide, and what of it reaches the sample
-    by arrival time on a second axis.
+    `guide` shows the source through the real guide, what of it reaches the sample by
+    arrival time on a second axis, and by wavelength in place of the perfect guide's.
 
     The source and the profiles are on linear scales, which show the pulse's shape; `log`
     puts the colour scale and both profiles' intensities on log scales, which show its
@@ -398,21 +398,24 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
         _log_intensity(time, result.at_sample_support / step)
 
     wstep = np.diff(w)
-    wavelength.stairs(result.by_wavelength_support / wstep, w, color='0.6', linestyle='--',
-                      label='whole region open')
-    wavelength.stairs(result.by_wavelength / wstep, w, color='C1', linewidth=1.5,
+    # the guide weights each wavelength bin by its own transmission, so it multiplies these
+    through = result.guide if guide else 1.0
+    wavelength.stairs(result.by_wavelength_support * through / wstep, w, color='0.6',
+                      linestyle='--', label='whole region open')
+    wavelength.stairs(result.by_wavelength * through / wstep, w, color='C1', linewidth=1.5,
                       label='weighted by transmission')
     reached = np.nonzero(result.by_wavelength_support)[0]
     if reached.size:
         lo, hi = w[max(reached[0] - 2, 0)], w[min(reached[-1] + 3, len(w) - 1)]
         wavelength.set_xlim(lo, hi)
     wavelength.set_xlabel('wavelength [Å]')
-    wavelength.set_ylabel('intensity [per Å, arb.]')
+    wavelength.set_ylabel(('through the guide ' if guide else 'intensity ')
+                          + '[per Å, arb.]')
     top = wavelength.secondary_xaxis('top', functions=(_energy, _wavelength))
     _energy_axis(top.xaxis, wavelength.get_xlim())
     top.set_xlabel('energy [meV]')
     if log:
-        _log_intensity(wavelength, result.by_wavelength_support / wstep)
+        _log_intensity(wavelength, result.by_wavelength_support * through / wstep)
     # the wavelength spread of what arrives together, against its mean wavelength
     spread = wavelength.twinx()
     spread.set_label('spread')
@@ -568,7 +571,7 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                                   description='lowest energy [meV]'),
         'shaping_time': FloatSlider(value=t_psc, min=0.05, max=4.0, step=0.05,
                                     description='shaping time [ms]'),
-        'latest_emission': FloatSlider(value=3.0, min=0.5, max=12.0, step=0.1,
+        'latest_emission': FloatSlider(value=6.0, min=0.5, max=12.0, step=0.1,
                                        description='last emission [ms]'),
         'wavelength_range': FloatRangeSlider(value=(1.0, 6.0), min=0.2, max=19.9, step=0.1,
                                              description='wavelengths [Å]'),
@@ -583,7 +586,7 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                                                   for n in range(1, 16)],
                                          value=PSC_SPEED_MAX, description='PSC limit'),
         'log': Checkbox(value=False, description='log intensities'),
-        'guide': Checkbox(value=False, description='guide transmission'),
+        'guide': Checkbox(value=True, description='guide transmission'),
     }
     for widget in controls.values():
         widget.style, widget.layout, widget.continuous_update = style, wide, False
@@ -695,6 +698,8 @@ if __name__ == '__main__':
     assert np.all(guide_transmission([0.5, 2.0, 12.0, 30.0]) <= 1.0)
     assert guide_transmission(1.0) < 0.005 < 0.05 < guide_transmission(10.0)
     assert result.transmitted_guide < 0.1 * result.transmitted
+    # by wavelength, the guide multiplies each bin: the profile sums to the guided total
+    assert np.isclose((result.by_wavelength * result.guide).sum(), result.transmitted_guide)
     # replacing every delay by chopcal's plus x moves the train as a pulse delay x does
     import chopcal
     settings = chopcal.bifrost(energy_min=4.5, shaping_time=2e-4,
