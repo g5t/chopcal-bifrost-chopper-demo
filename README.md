@@ -37,6 +37,14 @@ weight is the fraction of what enters the guide that reaches a 10 × 30 mm sampl
 from `guide_transmission.csv`: a McStas scan of niess's BIFROST with the choppers removed
 (10⁶ rays per point, 0.5–12 Å). Outside that range it holds the end values.
 
+If the train opens more than one region of the source, the one transmitting the most is
+the main region, outlined in red; the others are spurious, outlined in purple. Both
+profiles then split what reaches the sample into the two, with the spurious part in
+purple (dotted red through the guide), and the title gives its total and its fraction of
+the main. It is usually many orders of magnitude down, so use *log intensities* to see
+it; the log axes reach down to it. That makes the decay-time factor matter: the
+spurious regions sit late in the pulse, where the source is extrapolated.
+
 Below those, each chopper's delay has its own slider. It follows chopcal whenever one of
 chopcal's inputs (lowest energy, shaping time, PSC limit) changes, unless its lock is
 pressed. A delay moved by hand stays put until one of those inputs changes.
