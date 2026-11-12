@@ -3,9 +3,9 @@
 An interactive notebook showing the ESS source BIFROST sees put through its six choppers,
 computed exactly by [`chopcal`](https://pypi.org/project/chopcal/).
 
-- **Left:** the source intensity over (emission time, wavelength), from
-  [`tof`](https://tof.readthedocs.io)'s source library, with the region the chopper train
-  transmits outlined.
+- **Left:** the source over (emission time, wavelength), in neutrons per second into the
+  guide's entrance, from `ess_butterfly.py`, with the region the chopper train transmits
+  outlined.
 - **Right:** what reaches the sample, by arrival time and by wavelength (energy along the
   top). Dashed curves count the whole transmitted region as open; solid ones weight it by
   how likely each neutron is to get through while a disc's edge is still sweeping the beam.
@@ -22,6 +22,12 @@ together (as ESS's `BeamPosDly-S` does), and the fastest the pulse-shaping disks
 as a harmonic of 14 Hz: the designed disks are rated to 210 Hz, the substitutes installed
 now to 126 Hz. The speed chopcal picks, which a long burst can make slower, is shown under
 that control.
+
+Three controls change the source itself: the proton pulse's duration, the beam power, and
+a factor on the moderator's decay times. A shorter pulse keeps the neutrons per pulse, as
+McStas has it. If the proton current is unchanged, lower the power by the same factor too.
+The decay is fitted over the first few pulse lengths, so beyond about 9 ms it is an
+extrapolation; the factor shows how much the long-emission region depends on it.
 
 The *guide transmission* toggle, on by default, adds what reaches the sample through the
 real guide to the arrival-time plot, on a second axis. It also makes the wavelength plot
@@ -56,15 +62,17 @@ Without uv, any Python 3.11 or newer works:
 ```sh
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install "chopcal>=0.8" tof scipp numpy matplotlib ipympl ipywidgets jupyterlab
+pip install "chopcal>=0.8" numpy matplotlib ipympl ipywidgets jupyterlab
 jupyter lab bifrost_phasespace.ipynb
 ```
-
-The first run downloads the BIFROST source distribution (about 8 MB) into `tof`'s cache.
 
 ## Files
 
 - `bifrost_phasespace.ipynb`: the notebook.
+- `ess_butterfly.py`: McStas's `ESS_butterfly` moderator for any beamline (3 cm
+  moderator), as an absolute rate into (wavelength, emission time) bins. It is
+  independent of BIFROST and of the rest, and `python ess_butterfly.py` checks it against
+  McStas's own intensities into BIFROST's guide.
 - `guide_transmission.csv`: the guide's transmission against wavelength.
 - `polygonfigure.py`: the calculation and the plotting, in three layers usable on their
   own:
