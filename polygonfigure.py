@@ -120,7 +120,7 @@ class Transmission:
     by_wavelength_support: np.ndarray
     transmitted: float                  # weighted total
     emitted: float                      # total in the source rectangle
-    psc_speed: float                    # Hz, what the pulse-shaping pair turns at
+    psc_speed: float                    # Hz, what the pulse-shaping pair turns at; 0 parked
     #: (name, distance from the moderator in m) for each chopper, then the sample
     positions: list
     #: for each entry of `positions`, the (time, distance) outlines of the neutrons that
@@ -220,7 +220,7 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
                  arrival_bins=400, pulse_shaping_speed_max=PSC_SPEED_MAX, pulse_delay=0.0,
                  delays=None, power=ess_butterfly.REFERENCE_POWER,
                  pulse_duration=ess_butterfly.PULSE_DURATION,
-                 decay_scale=1.0) -> Transmission:
+                 decay_scale=1.0, parked=()) -> Transmission:
     """The source in a (wavelength, emission time) rectangle, through BIFROST's train.
 
     The rectangle is the source polygon chopcal transmits and the extent of the gridded
@@ -230,8 +230,9 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
     design pulse length: the proton current stays the same, so a shorter pulse delivers
     proportionally fewer protons, and neutrons, per pulse. `pulse_delay` moves every disc together; see
     `trains`. Everything reaching the sample is for a perfect guide; `at_sample_guide` and
-    `transmitted_guide` weight the source by `guide_transmission` as well. Times in s,
-    wavelengths in Å.
+    `transmitted_guide` weight the source by `guide_transmission` as well. The discs
+    named in `parked` are stopped open: they pass everything, as if they were not there.
+    Times in s, wavelengths in Å.
     """
     from chopcal import constants as c
     from chopcal.lib import Region, wavelength_to_inverse_velocity
@@ -253,8 +254,10 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
                                  time_edges[0], time_edges[-1] - time_edges[0])
     support_train, ramped_train = trains(energy_min, shaping_time, pulse_shaping_speed_max,
                                          pulse_delay, delays)
-    support = rectangle.transmit(support_train)
-    weighted = rectangle.transmit_weighted(ramped_train, GROUPS)
+    running = [i for i, n in enumerate(NAMES) if n not in parked]
+    support = rectangle.transmit([support_train[i] for i in running])
+    weighted = rectangle.transmit_weighted([ramped_train[i] for i in running],
+                                           [GROUPS[i] for i in running])
 
     distance = c.INSTRUMENT_LENGTH
     if support:
@@ -275,16 +278,18 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
     outline = [[(t, u / per_angstrom) for u, t in p.vertices] for p in support.polygons]
 
     # what gets through the first k choppers, swept from the moderator to the next one
-    stops = [(n, d.path) for n, d in zip(NAMES, support_train)] + [('sample', distance)]
+    stops = [(f'{n} (parked)' if n in parked else n, d.path)
+             for n, d in zip(NAMES, support_train)] + [('sample', distance)]
     stages, through = [], rectangle
     for k, (_, stop) in enumerate(stops):
-        if k:
+        if k and NAMES[k - 1] not in parked:
             through = through.transmit([support_train[k - 1]])
         stages.append([swept(p.vertices, 0.0, stop) for p in through.polygons])
     positions = stops
     until = 1.1 * max((t for polygons in stages for q in polygons for t, _ in q),
                       default=1 / 14)
-    openings = [open_windows(chopper, until) for chopper in support_train]
+    openings = [[(0.0, until)] if n in parked else open_windows(chopper, until)
+                for n, chopper in zip(NAMES, support_train)]
     at_sample, at_sample_support = moments(weighted), moments(support)
 
     # the main region and the spurious ones: every cell the train opens goes to the
@@ -321,7 +326,7 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
         spread_support=(at_sample_support.wavelength, at_sample_support.sigma),
         by_wavelength=by_wavelength(weighted), by_wavelength_support=by_wavelength(support),
         transmitted=weighted.integrate(amounts, inverse_velocities, time_edges),
-        emitted=float(amounts.sum()), psc_speed=abs(support_train[0].speed), guide=guide,
+        emitted=float(amounts.sum()), psc_speed=0.0 if {'ps1', 'ps2'} <= set(parked) else abs(support_train[0].speed), guide=guide,
         at_sample_guide=weighted.arrivals(guided, inverse_velocities, time_edges, distance,
                                           arrival_edges).sum(axis=1),
         transmitted_guide=weighted.integrate(guided, inverse_velocities, time_edges),
@@ -577,6 +582,8 @@ def draw_time_distance(result: Transmission, ax, top: float | None = None):
     stopped = plt.get_cmap('YlGnBu')(np.linspace(0.25, 0.85, len(result.stages) - 1))
     colours = [*stopped, 'crimson']
     for (name, _), polygons, colour in zip(result.positions, result.stages, colours):
+        if name.endswith('(parked)'):   # stops nothing: its band is the next one's
+            continue
         label = 'reaches the sample' if name == 'sample' else f'stopped by {name}'
         for polygon in polygons:
             ax.add_patch(Polygon([(t * 1e3, l) for t, l in polygon], closed=True,
@@ -595,7 +602,10 @@ def draw_time_distance(result: Transmission, ax, top: float | None = None):
         starts = [0.0] + [b for _, b in windows]
         ends = [a for a, _ in windows] + [end]
         closed = [(a * 1e3, b * 1e3) for a, b in zip(starts, ends) if a < b and a < end]
-        ax.hlines([at] * len(closed), *zip(*closed), color='0.2', linewidth=1.4)
+        if closed:
+            ax.hlines([at] * len(closed), *zip(*closed), color='0.2', linewidth=1.4)
+        else:   # parked open
+            ax.axhline(at, color='0.5', linestyle=':', linewidth=0.8)
     # one name per housing: the pairs are centimetres apart
     housings = []
     for name, at in result.positions:
@@ -703,17 +713,18 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
         widget.style, widget.layout, widget.continuous_update = style, wide, False
 
 
-    # one delay per disc, following chopcal until frozen, and free to move by hand until
-    # one of chopcal's own inputs changes; ranges cover chopcal over these controls' ranges
-    # and widen if chopcal ever goes beyond them
+    # one delay per disc, following chopcal, and free to move by hand until one of
+    # chopcal's own inputs changes; ranges cover chopcal over these controls' ranges and
+    # widen if chopcal ever goes beyond them. Each disc can be parked: stopped open.
     delays = {n: FloatSlider(value=0.0, min=lo, max=hi, step=0.01, readout_format='.2f',
                              description=f'{n} delay [ms]', continuous_update=False,
                              style=style, layout=Layout(width='22em'))
               for n, (lo, hi) in DELAY_RANGES_MS.items()}
-    frozen = {n: ToggleButton(value=False, icon='lock', tooltip='keep this delay when '
-                              "chopcal's inputs change", layout=Layout(width='3em'))
+    parked = {n: ToggleButton(value=False, description='parked',
+                              tooltip='stopped open: passes everything',
+                              layout=Layout(width='6em'))
               for n in NAMES}
-    suggested = {n: Label() for n in NAMES}   # what chopcal says now, frozen or not
+    suggested = {n: Label() for n in NAMES}   # what chopcal says now
     chopcal_inputs = ('energy_min', 'shaping_time', 'psc_speed_max')
     state = {'colorbar': None, 'syncing': False}
 
@@ -726,10 +737,9 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
             for n in NAMES:
                 value = settings[n].delay * 1e3
                 suggested[n].value = f'chopcal {value:.3f}'
-                if not frozen[n].value:
-                    delays[n].min = min(delays[n].min, value)
-                    delays[n].max = max(delays[n].max, value)
-                    delays[n].value = value
+                delays[n].min = min(delays[n].min, value)
+                delays[n].max = max(delays[n].max, value)
+                delays[n].value = value
         finally:
             state['syncing'] = False
 
@@ -743,6 +753,9 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
         if state['syncing']:
             return
         v = {k: w.value for k, w in controls.items()}
+        stopped = tuple(n for n in NAMES if parked[n].value)
+        for n in NAMES:
+            delays[n].disabled = n in stopped
         result = transmission(energy_min=v['energy_min'], shaping_time=v['shaping_time'] * 1e-3,
                               wavelength_range=v['wavelength_range'],
                               latest_emission=v['latest_emission'] * 1e-3,
@@ -752,7 +765,7 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                               pulse_shaping_speed_max=v['psc_speed_max'],
                               delays={n: w.value * 1e-3 for n, w in delays.items()},
                               power=v['power'], pulse_duration=v['pulse_duration'] * 1e-3,
-                              decay_scale=v['decay_scale'])
+                              decay_scale=v['decay_scale'], parked=stopped)
         state['colorbar'] = draw(result, axes, colorbar=state['colorbar'], log=v['log'],
                                  guide=v['guide'])
         fig.canvas.draw_idle()
@@ -760,21 +773,22 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                         f'{len(result.outline)} transmitted polygon(s)')
         slower = (' -- slower than the limit, for a burst this long'
                   if result.psc_speed < v['psc_speed_max'] else '')
-        psc.value = f'PSC turns at {result.psc_speed:g} Hz{slower}'
+        psc.value = (f'PSC turns at {result.psc_speed:g} Hz{slower}' if result.psc_speed
+                     else 'PSC parked')
         delivered = v['power'] * v['pulse_duration'] * 1e-3 / ess_butterfly.PULSE_DURATION
         power.value = f'beam power {delivered:.2f} MW with this pulse'
 
     for name in chopcal_inputs:   # before `update`, so the delays are chopcal's first
         controls[name].observe(follow_chopcal, names='value')
-    for widget in [*controls.values(), *delays.values()]:
+    for widget in [*controls.values(), *delays.values(), *parked.values()]:
         widget.observe(update, names='value')
     follow_chopcal()
     update()
     widgets = list(controls.values())
     widgets.insert(widgets.index(controls['psc_speed_max']) + 1, psc)
     widgets.insert(widgets.index(controls['power']) + 1, power)
-    rows = [HBox([delays[n], frozen[n], suggested[n]]) for n in NAMES]
-    return HBox([fig.canvas, VBox([*widgets, status, HTML('<b>chopper delays</b>'), *rows])])
+    rows = [HBox([delays[n], parked[n], suggested[n]]) for n in NAMES]
+    return HBox([fig.canvas, VBox([*widgets, status, HTML('<b>choppers</b>'), *rows])])
 
 
 def bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
@@ -841,8 +855,17 @@ if __name__ == '__main__':
                         pulse_duration=ess_butterfly.PULSE_DURATION / 2).emitted
     assert np.isclose(half, 0.5 * whole, rtol=1e-3), half / whole
 
-    # the delay sliders follow chopcal until frozen, and keep a hand-set value until one
-    # of chopcal's inputs changes
+    # a parked disc passes everything: parking every disc passes the whole rectangle,
+    # and parking one never passes less
+    everything = transmission(parked=NAMES)
+    assert np.isclose(everything.transmitted, everything.emitted)
+    assert everything.psc_speed == 0.0 and everything.openings[0] == [(0.0, everything.openings[0][0][1])]
+    for name in NAMES:
+        assert transmission(parked=(name,)).transmitted >= result.transmitted * (1 - 1e-9)
+    assert transmission(parked=('ps1', 'ps2')).transmitted > 2 * result.transmitted
+
+    # the delay sliders follow chopcal, and keep a hand-set value until one of chopcal's
+    # inputs changes; parking a disc greys out its delay
     import matplotlib
     matplotlib.use('module://ipympl.backend_nbagg')
     panel = _bifrost_transmitted_phasespace_figure().children[1].children
@@ -858,11 +881,11 @@ if __name__ == '__main__':
 
     assert all(np.isclose(rows[n][0].value, chopcal_ms(n)) for n in NAMES)
     rows['ps1'][0].value = 1.234                   # by hand
-    rows['fo1'][1].value = True                    # frozen
-    fo1 = rows['fo1'][0].value
     control['last emission [ms]'].value = 4.0      # not one of chopcal's inputs
     assert rows['ps1'][0].value == 1.234
     control['lowest energy [meV]'].value = 7.0     # one of chopcal's inputs
     assert np.isclose(rows['ps1'][0].value, chopcal_ms('ps1'))
-    assert rows['fo1'][0].value == fo1 and not np.isclose(fo1, chopcal_ms('fo1'))
+    assert all(np.isclose(rows[n][0].value, chopcal_ms(n)) for n in NAMES)
+    rows['fo1'][1].value = True                    # parked
+    assert rows['fo1'][0].disabled and not rows['fo2'][0].disabled
     print('ok')

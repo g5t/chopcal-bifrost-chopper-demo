@@ -45,9 +45,11 @@ the main. It is usually many orders of magnitude down, so use *log intensities* 
 it; the log axes reach down to it. That makes the decay-time factor matter: the
 spurious regions sit late in the pulse, where the source is extrapolated.
 
-Below those, each chopper's delay has its own slider. It follows chopcal whenever one of
-chopcal's inputs (lowest energy, shaping time, PSC limit) changes, unless its lock is
-pressed. A delay moved by hand stays put until one of those inputs changes.
+Below those, each chopper has a delay slider and a *parked* toggle. The delay follows
+chopcal whenever one of chopcal's inputs (lowest energy, shaping time, PSC limit)
+changes; moved by hand, it stays put until one of those inputs changes. A parked disc is
+stopped open, so it passes everything, as if it were not there: it is dotted in the
+time-distance diagram, and its delay is greyed out.
 
 A static version of this figure is on the chopcal documentation page
 *See BIFROST's source through its train*.
