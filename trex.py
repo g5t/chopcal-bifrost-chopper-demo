@@ -44,6 +44,11 @@ WINDOW = {'bw1': (0.085, 0.06, 0.083061), 'bw2': (0.085, 0.06, 0.084983),
 RADIUS = 0.35
 
 
+#: Repetition rate multiplications: multiples of 4, so that every disc, the P pair at
+#: 3/4 of RRM x 14 Hz among them, turns at a multiple of 14 Hz.
+RRM = tuple(range(4, 25, 4))
+
+
 def speeds(rrm: int) -> dict:
     """Each disc's speed, Hz, signed."""
     p, m = 0.75 * rrm * FREQUENCY, rrm * FREQUENCY
@@ -68,6 +73,7 @@ class Trex(Instrument):
     delay_ranges_ms = {n: (0.0, round(1e3 * T_OFFSET + PHASING[n] * 8 / c.H_OVER_M * 1e3 + 5))
                        for n in EDGES}
     guide_table = None   # ponytail: perfect guide until T-REX has a McStas scan of its own
+    zoom = (157.0, 164.5)   # the monochromating pair and the sample
     wavelength_range = (1.0, 4.0)
     latest_emission = 6e-3
 
@@ -77,6 +83,8 @@ class Trex(Instrument):
         from chopcal.lib import Chopper, beam_aperture
         if mode not in ('HF', 'HR'):
             raise ValueError(f"mode is 'HF' or 'HR', not {mode!r}")
+        if rrm not in RRM:
+            raise ValueError(f'rrm is one of {RRM}, not {rrm!r}')
         speed = speeds(rrm)
         shift = HF_SHIFT if mode == 'HF' else {}
         velocity = c.H_OVER_M / wavelength
@@ -97,11 +105,11 @@ class Trex(Instrument):
         return out
 
     def controls(self, wavelength=2.4, rrm=4, mode='HF'):
-        from ipywidgets import FloatSlider, IntSlider, ToggleButtons
+        from ipywidgets import FloatSlider, SelectionSlider, ToggleButtons
         return {
             'wavelength': FloatSlider(value=wavelength, min=0.5, max=8.0, step=0.01,
                                       description='central λ, L0 [Å]'),
-            'rrm': IntSlider(value=rrm, min=1, max=8, description='RRM'),
+            'rrm': SelectionSlider(options=RRM, value=rrm, description='RRM'),
             'mode': ToggleButtons(options=['HF', 'HR'], value=mode, description='mode'),
         }
 
@@ -139,4 +147,13 @@ if __name__ == '__main__':
     # the delays are the instr's: T_OFFSET plus the central neutron's flight
     for (disc, _), n in zip(TREX.choppers(wavelength=2.4), TREX.names):
         assert np.isclose(disc.delay, T_OFFSET + PHASING[n] * 2.4 / c.H_OVER_M)
+    # every allowed RRM turns every disc at a multiple of 14 Hz
+    for rrm in RRM:
+        assert all(abs(v) % FREQUENCY == 0 for v in speeds(rrm).values()), rrm
+    try:
+        TREX.choppers(rrm=6)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('RRM 6 accepted')
     print('ok')

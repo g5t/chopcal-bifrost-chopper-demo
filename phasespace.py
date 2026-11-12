@@ -52,6 +52,9 @@ class Instrument:
     #: what reaches the sample over what enters the guide, a CSV of wavelength (Å),
     #: fraction and its error; None for a perfect guide
     guide_table: Path | None = None
+    #: (from, to) m, the stretch of the instrument the second time-distance panel shows;
+    #: None for the choppers near the source
+    zoom: tuple | None = None
     wavelength_range: tuple = (1.0, 6.0)   # Å, the figure's starting source rectangle
     latest_emission: float = 6e-3          # s, the same
 
@@ -152,6 +155,7 @@ class Transmission:
     transmitted_spurious: float
     at_sample_guide_spurious: np.ndarray
     transmitted_guide_spurious: float
+    zoom: tuple | None = None           # the instrument's, for `draw`
 
 
 def open_windows(chopper, until: float):
@@ -353,7 +357,8 @@ def transmission(instrument: Instrument, settings: dict | None = None,
             guided_spurious, inverse_velocities, time_edges, distance,
             arrival_edges).sum(axis=1),
         transmitted_guide_spurious=weighted.integrate(guided_spurious, inverse_velocities,
-                                                      time_edges))
+                                                      time_edges),
+        zoom=instrument.zoom)
 
 
 def _cells(indices, like):
@@ -555,19 +560,24 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     time.set_title(f'{text}{result.transmitted:.3g} n/s ({fraction:.3%} of the source '
                    f'rectangle) reach the sample{through}', fontsize='medium')
     # the whole instrument, then the choppers in its first quarter, where most is stopped
+    # the whole instrument, then the instrument's zoom, or the choppers in its first
+    # quarter, where most is stopped
     near = [at for _, at in result.positions if at < 0.25 * result.positions[-1][1]]
-    for ax, top in zip(rest, (None, 1.15 * max(near))):
-        draw_time_distance(result, ax, top)
+    zoom = result.zoom or (0.0, 1.15 * max(near, default=result.positions[-1][1]))
+    for ax, window in zip(rest, (None, zoom)):
+        draw_time_distance(result, ax, window)
     return colorbar
 
 
-def _latest_below(polygon, top):
-    """The latest time on a (t, L) outline at or below distance `top`."""
-    times = [t for t, l in polygon if l <= top]
+def _times_between(polygon, low, high):
+    """The times a (t, L) outline reaches between distances `low` and `high`: its
+    vertices there and where its edges cross either."""
+    times = [t for t, l in polygon if low <= l <= high]
     for (t0, l0), (t1, l1) in zip(polygon, polygon[1:] + polygon[:1]):
-        if (l0 - top) * (l1 - top) < 0:
-            times.append(t0 + (t1 - t0) * (top - l0) / (l1 - l0))
-    return max(times, default=0.0)
+        for at in (low, high):
+            if (l0 - at) * (l1 - at) < 0:
+                times.append(t0 + (t1 - t0) * (at - l0) / (l1 - l0))
+    return times
 
 
 def _log_intensity(ax, values, spurious=None):
@@ -582,14 +592,15 @@ def _log_intensity(ax, values, spurious=None):
         ax.set_ylim(low, peak * 2)
 
 
-def draw_time_distance(result: Transmission, ax, top: float | None = None):
+def draw_time_distance(result: Transmission, ax, window: tuple | None = None):
     """Where the transmitted neutrons are, and where the rest stop.
 
     Each band is what got through every chopper before one, from the source to that
     chopper. The bands are translucent, so where they overlap shows; the part of a band
     the next one does not cover is what that chopper stops. The last band, to the
     sample, is the outlined region. Each chopper is a line broken where it is open.
-    `top` (m) shows only the instrument up to there.
+    `window` (m), (from, to), shows only that stretch of the instrument, over the times
+    the bands reach it.
     """
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon
@@ -604,14 +615,17 @@ def draw_time_distance(result: Transmission, ax, top: float | None = None):
                                  facecolor=colour, edgecolor=colour, alpha=0.35,
                                  linewidth=0.8, label=label))
             label = None
-    top = result.positions[-1][1] if top is None else top
-    latest = max((_latest_below(p, top) for polygons in result.stages for p in polygons),
-                 default=1 / 14)
+    sample = result.positions[-1][1]
+    low, top = window or (0.0, sample)
+    times = [t for polygons in result.stages for p in polygons
+             for t in _times_between(p, low, top)] or [0.0, 1 / 14]
+    margin = 0.03 * (max(times) - min(times))
+    start = 0.0 if low == 0 else max(min(times) - margin, 0.0)
+    end = max(times) + margin
     # each disc closed between its openings; a pair's lines lie on top of each other, so
     # its gaps show only where both discs are open
-    end = 1.03 * latest
     for (_, at), windows in zip(result.positions, result.openings):
-        if at > top:
+        if not low <= at <= top:
             continue
         starts = [0.0] + [b for _, b in windows]
         ends = [a for a, _ in windows] + [end]
@@ -623,9 +637,9 @@ def draw_time_distance(result: Transmission, ax, top: float | None = None):
     # one name per housing: the pairs are centimetres apart
     housings = []
     for name, at in result.positions:
-        if at > top:
-            break
-        if housings and at - housings[-1][1] < 0.04 * top:   # labels would overlap
+        if not low <= at <= top:
+            continue
+        if housings and at - housings[-1][1] < 0.04 * (top - low):   # labels would overlap
             housings[-1][0].append(name)
         else:
             housings.append(([name], at))
@@ -634,12 +648,14 @@ def draw_time_distance(result: Transmission, ax, top: float | None = None):
                     xytext=(4, 0), textcoords='offset points', va='center',
                     fontsize='small')
     ax.axhline(result.positions[-1][1], color='0.4', linewidth=0.6)   # the sample
-    ax.set_xlim(0.0, end * 1e3)
-    ax.set_ylim(0.0, 1.03 * top)
+    ax.set_xlim(start * 1e3, end * 1e3)
+    ax.set_ylim(low, top + 0.03 * (top - low))
     ax.set_xlabel('time [ms]')
     ax.set_ylabel('distance from the moderator [m]')
-    if top < result.positions[-1][1]:
-        ax.set_title('... and near the source', fontsize='medium')
+    if window:
+        inside = [n for n, at in result.positions[:-1] if low <= at <= top]
+        ax.set_title('... and near the source' if low == 0
+                     else f"... and around {', '.join(inside)}", fontsize='medium')
     else:
         ax.set_title('time-distance: where the train stops each part of the source',
                      fontsize='medium')
