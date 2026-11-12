@@ -23,11 +23,11 @@ as a harmonic of 14 Hz: the designed disks are rated to 210 Hz, the substitutes 
 now to 126 Hz. The speed chopcal picks, which a long burst can make slower, is shown under
 that control.
 
-The *guide transmission* toggle weights the source by how much of each wavelength the
-guide carries from its entrance to the sample, relative to the best wavelength. This is
-`guide_transmission.csv`, a McStas scan of niess's BIFROST with the choppers removed
-(10⁶ rays per point, 0.5–12 Å, a 10 × 30 mm sample window). Outside that range it holds
-the end values.
+The *guide transmission* toggle adds what reaches the sample through the real guide to
+the arrival-time plot, on a second axis, and weights the source on the left by it. The
+weight is the fraction of what enters the guide that reaches a 10 × 30 mm sample window,
+from `guide_transmission.csv`: a McStas scan of niess's BIFROST with the choppers removed
+(10⁶ rays per point, 0.5–12 Å). Outside that range it holds the end values.
 
 Below those, each chopper's delay has its own slider. It follows chopcal whenever one of
 chopcal's inputs (lowest energy, shaping time, PSC limit) changes, unless its lock is

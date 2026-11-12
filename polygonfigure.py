@@ -70,10 +70,10 @@ def _guide_table():
 
 
 def guide_transmission(wavelength):
-    """How much of what enters the guide reaches the sample, relative to the best
-    wavelength; interpolated in the table, and held at its end values beyond it."""
+    """The fraction of what enters the guide that reaches a 10 x 30 mm sample window;
+    interpolated in the table, and held at its end values beyond it."""
     table, value = _guide_table()
-    return np.interp(wavelength, table, value / value.max())
+    return np.interp(wavelength, table, value)
 
 
 def rebinned(wavelength_edges, time_edges, name: str = 'ess-bifrost') -> np.ndarray:
@@ -152,8 +152,10 @@ class Transmission:
     #: for each chopper, the (start, end) times in s that any of the beam can pass it,
     #: from 0 to past the latest time in `stages`
     openings: list
-    #: whether `source` is weighted by the guide's transmission
-    guide: bool = False
+    #: the guide's transmission at each wavelength bin's centre
+    guide: np.ndarray
+    at_sample_guide: np.ndarray         # `at_sample` through the real guide
+    transmitted_guide: float            # `transmitted` through the real guide
 
 
 def open_windows(chopper, until: float):
@@ -193,14 +195,14 @@ def swept(vertices, l0: float, l1: float):
 def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
                  latest_emission=3e-3, wavelength_bin=0.02, time_bin=20e-6,
                  arrival_bins=400, pulse_shaping_speed_max=PSC_SPEED_MAX, pulse_delay=0.0,
-                 delays=None, guide=False, source='ess-bifrost') -> Transmission:
+                 delays=None, source='ess-bifrost') -> Transmission:
     """The source in a (wavelength, emission time) rectangle, through BIFROST's train.
 
     The rectangle is the source polygon chopcal transmits and the extent of the gridded
     source; the bin sizes set the grid. `pulse_delay` moves every disc together; see
-    `trains`. `guide` weights the source by `guide_transmission`, so that what reaches the
-    sample allows for the guide; the fraction reported is still of the bare source. Times
-    in s, wavelengths in Å.
+    `trains`. Everything reaching the sample is for a perfect guide; `at_sample_guide` and
+    `transmitted_guide` weight the source by `guide_transmission` as well. Times in s,
+    wavelengths in Å.
     """
     from chopcal import constants as c
     from chopcal.lib import Region, wavelength_to_inverse_velocity
@@ -209,10 +211,9 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
     wavelength_edges = np.arange(low, high + 0.5 * wavelength_bin, wavelength_bin)
     time_edges = np.arange(0.0, latest_emission + 0.5 * time_bin, time_bin)
     amounts = rebinned(wavelength_edges, time_edges, source)
-    emitted = float(amounts.sum())
-    if guide:   # ponytail: at bin centres, fine while the table is smooth on the bin size
-        centres = 0.5 * (wavelength_edges[1:] + wavelength_edges[:-1])
-        amounts = amounts * guide_transmission(centres)
+    # ponytail: at bin centres, fine while the table is smooth on the bin size
+    guide = guide_transmission(0.5 * (wavelength_edges[1:] + wavelength_edges[:-1]))
+    guided = amounts * guide
 
     per_angstrom = wavelength_to_inverse_velocity(1.0)   # chopper-lib's own conversion
     inverse_velocities = wavelength_edges * per_angstrom
@@ -263,7 +264,10 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
         spread_support=(at_sample_support.wavelength, at_sample_support.sigma),
         by_wavelength=by_wavelength(weighted), by_wavelength_support=by_wavelength(support),
         transmitted=weighted.integrate(amounts, inverse_velocities, time_edges),
-        emitted=emitted, psc_speed=abs(support_train[0].speed), guide=guide,
+        emitted=float(amounts.sum()), psc_speed=abs(support_train[0].speed), guide=guide,
+        at_sample_guide=weighted.arrivals(guided, inverse_velocities, time_edges, distance,
+                                          arrival_edges).sum(axis=1),
+        transmitted_guide=weighted.integrate(guided, inverse_velocities, time_edges),
         positions=positions, stages=stages, openings=openings)
 
 
@@ -313,8 +317,11 @@ def make_axes(figsize=(12, 10)):
 
 
 def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
-         log: bool = False):
+         log: bool = False, guide: bool = False):
     """Draw one result on `make_axes`'s axes, replacing what was there.
+
+    `guide` shows the source through the real guide, and what of it reaches the sample
+    by arrival time on a second axis.
 
     The source and the profiles are on linear scales, which show the pulse's shape; `log`
     puts the colour scale and both profiles' intensities on log scales, which show its
@@ -329,11 +336,12 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
         for secondary in list(getattr(ax, 'child_axes', [])):
             secondary.remove()
     for ax in list(left.figure.axes):   # the twinned spread axis from the last draw
-        if ax.get_label() == 'spread':
+        if ax.get_label() in ('spread', 'guided'):
             ax.remove()
 
     w, t = result.wavelength_edges, result.time_edges
-    density = result.source / np.outer(np.diff(t * 1e3), np.diff(w))   # per ms per Å
+    source = result.source * result.guide if guide else result.source
+    density = source / np.outer(np.diff(t * 1e3), np.diff(w))   # per ms per Å
     positive = density[density > 0]
     if not positive.size:
         norm = None
@@ -355,7 +363,7 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     energy = left.secondary_yaxis('right', functions=(_energy, _wavelength))
     _energy_axis(energy.yaxis, (w[0], w[-1]))
     energy.set_ylabel('energy [meV]')
-    left.set_title(('source through the guide' if result.guide else 'source')
+    left.set_title(('source through the guide' if guide else 'source')
                    + ', and the region the train transmits', fontsize='medium')
     if colorbar is None:
         colorbar = left.figure.colorbar(mesh, ax=left, location='bottom', shrink=0.8,
@@ -372,7 +380,20 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     time.set_xlabel('arrival time at the sample [ms]')
     time.set_ylabel('intensity [per ms, arb.]')
     time.set_xlim(a[0], a[-1])
-    time.legend(loc='upper left', bbox_to_anchor=(1.01, 1.0), fontsize='small')
+    handles = time.get_legend_handles_labels()[0]
+    if guide:   # an order of magnitude below, so on its own axis
+        guided = time.twinx()
+        guided.set_label('guided')
+        guided.stairs(result.at_sample_guide / step, a, color='C3', linewidth=1.3,
+                      label='through the guide')
+        guided.set_ylim(bottom=0.0)
+        guided.set_ylabel('through the guide [per ms, arb.]', color='C3')
+        guided.tick_params(axis='y', colors='C3')
+        handles += guided.get_legend_handles_labels()[0]
+        if log:
+            _log_intensity(guided, result.at_sample_guide / step)
+    time.legend(handles=handles, loc='upper left',
+                bbox_to_anchor=(1.2 if guide else 1.01, 1.0), fontsize='small')
     if log:
         _log_intensity(time, result.at_sample_support / step)
 
@@ -408,8 +429,10 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
 
     fraction = result.transmitted / result.emitted if result.emitted else 0.0
     text = title + '\n' if title else ''
-    time.set_title(f'{text}{fraction:.3%} of the source rectangle reaches the sample',
-                   fontsize='medium')
+    through = (f',\n{result.transmitted_guide / result.emitted:.3%} through the guide'
+               if guide and result.emitted else '')
+    time.set_title(f'{text}{fraction:.3%} of the source rectangle reaches the sample'
+                   f'{through}', fontsize='medium')
     # the whole instrument, then the choppers in its first quarter, where most is stopped
     near = [at for _, at in result.positions if at < 0.25 * result.positions[-1][1]]
     for ax, top in zip(rest, (None, 1.15 * max(near))):
@@ -612,9 +635,9 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                               time_bin=v['time_bin'] * 1e-6,
                               pulse_delay=v['pulse_delay'] * 1e-6,
                               pulse_shaping_speed_max=v['psc_speed_max'],
-                              delays={n: w.value * 1e-3 for n, w in delays.items()},
-                              guide=v['guide'])
-        state['colorbar'] = draw(result, axes, colorbar=state['colorbar'], log=v['log'])
+                              delays={n: w.value * 1e-3 for n, w in delays.items()})
+        state['colorbar'] = draw(result, axes, colorbar=state['colorbar'], log=v['log'],
+                                 guide=v['guide'])
         fig.canvas.draw_idle()
         status.value = (f'{result.source.shape[1]} x {result.source.shape[0]} bins; '
                         f'{len(result.outline)} transmitted polygon(s)')
@@ -670,8 +693,8 @@ if __name__ == '__main__':
                        for a, b in windows), at
     # the guide only removes neutrons, least at long wavelengths
     assert np.all(guide_transmission([0.5, 2.0, 12.0, 30.0]) <= 1.0)
-    assert guide_transmission(1.0) < 0.05 < 0.9 < guide_transmission(10.0)
-    assert transmission(guide=True).transmitted < result.transmitted
+    assert guide_transmission(1.0) < 0.005 < 0.05 < guide_transmission(10.0)
+    assert result.transmitted_guide < 0.1 * result.transmitted
     # replacing every delay by chopcal's plus x moves the train as a pulse delay x does
     import chopcal
     settings = chopcal.bifrost(energy_min=4.5, shaping_time=2e-4,
