@@ -79,9 +79,16 @@ class Trex(Instrument):
     wavelength_range = (1.0, 4.0)
     latest_emission = 6e-3
 
-    def choppers(self, wavelength=2.4, rrm=4, mode='HF'):
+    def choppers(self, wavelength=2.4, rrm=4, mode='HF', flip_m2=False):
         """The instr's phasing for central wavelength `wavelength` (Å), repetition rate
-        multiplication `rrm`, and 'HF' or 'HR'."""
+        multiplication `rrm`, and 'HF' or 'HR'.
+
+        In the instr both of M1's openings line up with M2's in either mode -- as though
+        one disc were mounted the other way round from the design. `flip_m2` turns M2
+        over: its openings mirror, a -> 360 - a, still phased to put the selected slit
+        on the beam, so only the selected pair lines up and the other pair is 10 degrees
+        apart.
+        """
         from chopcal.lib import Chopper, beam_aperture
         if mode not in ('HF', 'HR'):
             raise ValueError(f"mode is 'HF' or 'HR', not {mode!r}")
@@ -95,6 +102,8 @@ class Trex(Instrument):
             inner = beam_aperture(RADIUS, *WINDOW[n])
             centre = beam_aperture(RADIUS, *WINDOW[n], at='centre')
             edges = [e + shift.get(n, 0) for e in EDGES[n]]
+            if flip_m2 and n == 'm2':
+                edges = sorted(360 - e for e in edges)
             spin, beam = speed[n], BEAM[n]
             if beam == 180:
                 # chopcal takes every disc as below the beam, which sets which way its
@@ -106,16 +115,17 @@ class Trex(Instrument):
             out.append((disc, centre))
         return out
 
-    def controls(self, wavelength=2.4, rrm=4, mode='HF'):
-        from ipywidgets import FloatSlider, SelectionSlider, ToggleButtons
+    def controls(self, wavelength=2.4, rrm=4, mode='HF', flip_m2=False):
+        from ipywidgets import Checkbox, FloatSlider, SelectionSlider, ToggleButtons
         return {
             'wavelength': FloatSlider(value=wavelength, min=0.5, max=8.0, step=0.01,
                                       description='central λ, L0 [Å]'),
             'rrm': SelectionSlider(options=RRM, value=rrm, description='RRM'),
             'mode': ToggleButtons(options=['HF', 'HR'], value=mode, description='mode'),
+            'flip_m2': Checkbox(value=flip_m2, description='M2 turned over'),
         }
 
-    def zoom(self, wavelength=2.4, rrm=4, mode='HF'):
+    def zoom(self, wavelength=2.4, rrm=4, mode='HF', flip_m2=False):
         """The M pair and the sample, around the L0 band: from a band spacing before it
         reaches 157 m to one after it reaches 164.5 m."""
         low, high = 157.0, 164.5
@@ -165,6 +175,14 @@ if __name__ == '__main__':
     assert end - start < 3 / (4 * FREQUENCY) + (high - low) * 2.4 / c.H_OVER_M
     mean, sigma = result.spread
     assert np.sum(np.isfinite(sigma) & (abs(mean - 2.4) < 0.1)) > 10
+    # turning M2 over keeps the selected pair of M openings lined up, so it changes
+    # nothing while the P pair blocks the other; with the P pair parked, it lets less by
+    flipped = transmission(TREX, dict(flip_m2=True))
+    assert np.isclose(flipped.transmitted, result.transmitted, rtol=1e-6)
+    for mode in ('HF', 'HR'):
+        free = transmission(TREX, dict(mode=mode), parked=('p1', 'p2'))
+        turned = transmission(TREX, dict(mode=mode, flip_m2=True), parked=('p1', 'p2'))
+        assert turned.transmitted < 0.8 * free.transmitted, mode
     # every allowed RRM turns every disc at a multiple of 14 Hz
     for rrm in RRM:
         assert all(abs(v) % FREQUENCY == 0 for v in speeds(rrm).values()), rrm
