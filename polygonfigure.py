@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from itertools import combinations
 from math import ceil, floor
+from pathlib import Path
 
 import numpy as np
 
@@ -55,6 +56,24 @@ def source_distribution(name: str = 'ess-bifrost'):
         data.coords[dim] = sc.concat([centres - 0.5 * step, centres[-1:] + 0.5 * step], dim)
     data.coords['birth_time'] = data.coords['birth_time'].to(unit='s')
     return data
+
+
+#: BIFROST's guide transmission against wavelength, from McStas: what reaches a 10 x 30 mm
+#: sample window over what enters the guide, with the choppers removed. Made by
+#: bifrost-guide-transmission (niess's BIFROST, scanned with restage).
+GUIDE_TRANSMISSION = Path(__file__).with_name('guide_transmission.csv')
+
+
+@lru_cache(maxsize=1)
+def _guide_table():
+    return np.loadtxt(GUIDE_TRANSMISSION, delimiter=',', skiprows=1, usecols=(0, 1)).T
+
+
+def guide_transmission(wavelength):
+    """How much of what enters the guide reaches the sample, relative to the best
+    wavelength; interpolated in the table, and held at its end values beyond it."""
+    table, value = _guide_table()
+    return np.interp(wavelength, table, value / value.max())
 
 
 def rebinned(wavelength_edges, time_edges, name: str = 'ess-bifrost') -> np.ndarray:
@@ -133,6 +152,8 @@ class Transmission:
     #: for each chopper, the (start, end) times in s that any of the beam can pass it,
     #: from 0 to past the latest time in `stages`
     openings: list
+    #: whether `source` is weighted by the guide's transmission
+    guide: bool = False
 
 
 def open_windows(chopper, until: float):
@@ -172,12 +193,14 @@ def swept(vertices, l0: float, l1: float):
 def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
                  latest_emission=3e-3, wavelength_bin=0.02, time_bin=20e-6,
                  arrival_bins=400, pulse_shaping_speed_max=PSC_SPEED_MAX, pulse_delay=0.0,
-                 delays=None, source='ess-bifrost') -> Transmission:
+                 delays=None, guide=False, source='ess-bifrost') -> Transmission:
     """The source in a (wavelength, emission time) rectangle, through BIFROST's train.
 
     The rectangle is the source polygon chopcal transmits and the extent of the gridded
     source; the bin sizes set the grid. `pulse_delay` moves every disc together; see
-    `trains`. Times in s, wavelengths in Å.
+    `trains`. `guide` weights the source by `guide_transmission`, so that what reaches the
+    sample allows for the guide; the fraction reported is still of the bare source. Times
+    in s, wavelengths in Å.
     """
     from chopcal import constants as c
     from chopcal.lib import Region, wavelength_to_inverse_velocity
@@ -186,6 +209,10 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
     wavelength_edges = np.arange(low, high + 0.5 * wavelength_bin, wavelength_bin)
     time_edges = np.arange(0.0, latest_emission + 0.5 * time_bin, time_bin)
     amounts = rebinned(wavelength_edges, time_edges, source)
+    emitted = float(amounts.sum())
+    if guide:   # ponytail: at bin centres, fine while the table is smooth on the bin size
+        centres = 0.5 * (wavelength_edges[1:] + wavelength_edges[:-1])
+        amounts = amounts * guide_transmission(centres)
 
     per_angstrom = wavelength_to_inverse_velocity(1.0)   # chopper-lib's own conversion
     inverse_velocities = wavelength_edges * per_angstrom
@@ -236,7 +263,7 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
         spread_support=(at_sample_support.wavelength, at_sample_support.sigma),
         by_wavelength=by_wavelength(weighted), by_wavelength_support=by_wavelength(support),
         transmitted=weighted.integrate(amounts, inverse_velocities, time_edges),
-        emitted=float(amounts.sum()), psc_speed=abs(support_train[0].speed),
+        emitted=emitted, psc_speed=abs(support_train[0].speed), guide=guide,
         positions=positions, stages=stages, openings=openings)
 
 
@@ -328,7 +355,8 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     energy = left.secondary_yaxis('right', functions=(_energy, _wavelength))
     _energy_axis(energy.yaxis, (w[0], w[-1]))
     energy.set_ylabel('energy [meV]')
-    left.set_title('source, and the region the train transmits')
+    left.set_title(('source through the guide' if result.guide else 'source')
+                   + ', and the region the train transmits', fontsize='medium')
     if colorbar is None:
         colorbar = left.figure.colorbar(mesh, ax=left, location='bottom', shrink=0.8,
                                         label='source intensity [per ms per Å, arb.]')
@@ -532,6 +560,7 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                                                   for n in range(1, 16)],
                                          value=PSC_SPEED_MAX, description='PSC limit'),
         'log': Checkbox(value=False, description='log intensities'),
+        'guide': Checkbox(value=False, description='guide transmission'),
     }
     for widget in controls.values():
         widget.style, widget.layout, widget.continuous_update = style, wide, False
@@ -583,7 +612,8 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                               time_bin=v['time_bin'] * 1e-6,
                               pulse_delay=v['pulse_delay'] * 1e-6,
                               pulse_shaping_speed_max=v['psc_speed_max'],
-                              delays={n: w.value * 1e-3 for n, w in delays.items()})
+                              delays={n: w.value * 1e-3 for n, w in delays.items()},
+                              guide=v['guide'])
         state['colorbar'] = draw(result, axes, colorbar=state['colorbar'], log=v['log'])
         fig.canvas.draw_idle()
         status.value = (f'{result.source.shape[1]} x {result.source.shape[0]} bins; '
@@ -638,6 +668,10 @@ if __name__ == '__main__':
             times = [t + (at - SOURCE_PLANE) * w * per_angstrom for t, w in polygon]
             assert any(a - 1e-9 <= min(times) and max(times) <= b + 1e-9
                        for a, b in windows), at
+    # the guide only removes neutrons, least at long wavelengths
+    assert np.all(guide_transmission([0.5, 2.0, 12.0, 30.0]) <= 1.0)
+    assert guide_transmission(1.0) < 0.05 < 0.9 < guide_transmission(10.0)
+    assert transmission(guide=True).transmitted < result.transmitted
     # replacing every delay by chopcal's plus x moves the train as a pulse delay x does
     import chopcal
     settings = chopcal.bifrost(energy_min=4.5, shaping_time=2e-4,

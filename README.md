@@ -23,6 +23,12 @@ as a harmonic of 14 Hz: the designed disks are rated to 210 Hz, the substitutes 
 now to 126 Hz. The speed chopcal picks, which a long burst can make slower, is shown under
 that control.
 
+The *guide transmission* toggle weights the source by how much of each wavelength the
+guide carries from its entrance to the sample, relative to the best wavelength. This is
+`guide_transmission.csv`, a McStas scan of niess's BIFROST with the choppers removed
+(10⁶ rays per point, 0.5–12 Å, a 10 × 30 mm sample window). Outside that range it holds
+the end values.
+
 Below those, each chopper's delay has its own slider. It follows chopcal whenever one of
 chopcal's inputs (lowest energy, shaping time, PSC limit) changes, unless its lock is
 pressed. A delay moved by hand stays put until one of those inputs changes.
@@ -58,6 +64,7 @@ The first run downloads the BIFROST source distribution (about 8 MB) into `tof`'
 ## Files
 
 - `bifrost_phasespace.ipynb`: the notebook.
+- `guide_transmission.csv`: the guide's transmission against wavelength.
 - `polygonfigure.py`: the calculation and the plotting, in three layers usable on their
   own:
   - `transmission(...)` computes one setting and returns plain arrays, no plotting;
