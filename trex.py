@@ -13,11 +13,14 @@ the phasing distances are its own numbers, the discs' paths where it places them
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from chopcal import constants as c
 
 import ess_butterfly
 from phasespace import Instrument
 
+HERE = Path(__file__).parent
 #: Into the pulse that the discs are phased for, s: about its centre.
 T_OFFSET = 1.7e-3
 FREQUENCY = 14.0
@@ -72,14 +75,22 @@ class Trex(Instrument):
     #: T_OFFSET plus the flight time at up to 8 Å
     delay_ranges_ms = {n: (0.0, round(1e3 * T_OFFSET + PHASING[n] * 8 / c.H_OVER_M * 1e3 + 5))
                        for n in EDGES}
-    guide_table = None   # ponytail: perfect guide until T-REX has a McStas scan of its own
+    #: from McStas, trex_primary.instr with the choppers removed, what reaches a
+    #: 10 x 30 mm sample window over what enters Guide_1 (bifrost-guide-transmission):
+    #: the bispectral bender out, then in
+    guide_tables = {False: HERE / 'trex_guide_transmission_bender_out.csv',
+                    True: HERE / 'trex_guide_transmission_bender_in.csv'}
+    guide_table = guide_tables[False]
     wavelength_bin = 0.005
     time_bin = 10e-6
     arrival_bin = 10e-6   # a band takes a few hundred µs to arrive
     wavelength_range = (1.0, 4.0)
     latest_emission = 6e-3
 
-    def choppers(self, wavelength=2.4, rrm=4, mode='HF', flip_m2=False):
+    def guide(self, bender=False, **_):
+        return self.guide_tables[bool(bender)]
+
+    def choppers(self, wavelength=2.4, rrm=4, mode='HF', flip_m2=False, bender=False):
         """The instr's phasing for central wavelength `wavelength` (Å), repetition rate
         multiplication `rrm`, and 'HF' or 'HR'.
 
@@ -87,7 +98,7 @@ class Trex(Instrument):
         one disc were mounted the other way round from the design. `flip_m2` turns M2
         over: its openings mirror, a -> 360 - a, still phased to put the selected slit
         on the beam, so only the selected pair lines up and the other pair is 10 degrees
-        apart.
+        apart. `bender` moves only the guide's transmission, not the discs.
         """
         from chopcal.lib import Chopper, beam_aperture
         if mode not in ('HF', 'HR'):
@@ -115,7 +126,7 @@ class Trex(Instrument):
             out.append((disc, centre))
         return out
 
-    def controls(self, wavelength=2.4, rrm=4, mode='HF', flip_m2=False):
+    def controls(self, wavelength=2.4, rrm=4, mode='HF', flip_m2=False, bender=False):
         from ipywidgets import Checkbox, FloatSlider, SelectionSlider, ToggleButtons
         return {
             'wavelength': FloatSlider(value=wavelength, min=0.5, max=8.0, step=0.01,
@@ -123,9 +134,12 @@ class Trex(Instrument):
             'rrm': SelectionSlider(options=RRM, value=rrm, description='RRM'),
             'mode': ToggleButtons(options=['HF', 'HR'], value=mode, description='mode'),
             'flip_m2': Checkbox(value=flip_m2, description='M2 turned over'),
+            # the bispectral switch: in, the cold bender deflects the cold moderator's
+            # neutrons into the guide
+            'bender': Checkbox(value=bender, description='bender in'),
         }
 
-    def zoom(self, wavelength=2.4, rrm=4, mode='HF', flip_m2=False):
+    def zoom(self, wavelength=2.4, rrm=4, mode='HF', flip_m2=False, bender=False):
         """The M pair and the sample, around the L0 band: from a band spacing before it
         reaches 157 m to one after it reaches 164.5 m."""
         low, high = 157.0, 164.5
@@ -183,6 +197,12 @@ if __name__ == '__main__':
         free = transmission(TREX, dict(mode=mode), parked=('p1', 'p2'))
         turned = transmission(TREX, dict(mode=mode, flip_m2=True), parked=('p1', 'p2'))
         assert turned.transmitted < 0.8 * free.transmitted, mode
+    # the bender is a bispectral switch: in, the guide carries long wavelengths better
+    # and short ones worse; it moves no disc
+    out, bent = (TREX.guide_transmission([1.0, 6.0], bender=b) for b in (False, True))
+    assert bent[0] < out[0] and bent[1] > out[1]
+    inside_ = transmission(TREX, dict(bender=True))
+    assert inside_.outline == result.outline and inside_.transmitted_guide != result.transmitted_guide
     # every allowed RRM turns every disc at a multiple of 14 Hz
     for rrm in RRM:
         assert all(abs(v) % FREQUENCY == 0 for v in speeds(rrm).values()), rrm

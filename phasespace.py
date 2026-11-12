@@ -50,7 +50,8 @@ class Instrument:
     groups: tuple                       # discs sharing a housing share a number
     delay_ranges_ms: dict               # slider ranges, by disc name
     #: what reaches the sample over what enters the guide, a CSV of wavelength (Å),
-    #: fraction and its error; None for a perfect guide
+    #: fraction and its error; None for a perfect guide. An instrument whose guide
+    #: changes with its settings says which table by `guide`.
     guide_table: Path | None = None
     wavelength_range: tuple = (1.0, 6.0)   # Å, the figure's starting source rectangle
     latest_emission: float = 6e-3          # s, the same
@@ -85,12 +86,17 @@ class Instrument:
         """A line shown under the instrument's controls."""
         return ''
 
-    def guide_transmission(self, wavelength):
+    def guide(self, **settings) -> Path | None:
+        """The guide's table for these settings."""
+        return self.guide_table
+
+    def guide_transmission(self, wavelength, /, **settings):
         """The fraction of what enters the guide that reaches the sample; interpolated
-        in `guide_table`, and held at its end values beyond it."""
-        if self.guide_table is None:
+        in the settings' table, and held at its end values beyond it."""
+        path = self.guide(**settings)
+        if path is None:
             return np.ones_like(np.asarray(wavelength, dtype=float))
-        table, value = _guide_table(self.guide_table)
+        table, value = _guide_table(path)
         return np.interp(wavelength, table, value)
 
 
@@ -274,7 +280,8 @@ def transmission(instrument: Instrument, settings: dict | None = None,
                                  duration=pulse_duration, decay_scale=decay_scale)
     # ponytail: at bin centres, fine while the table is smooth on the bin size
     guide = instrument.guide_transmission(0.5 * (wavelength_edges[1:]
-                                                 + wavelength_edges[:-1]))
+                                                 + wavelength_edges[:-1]),
+                                          **(settings or {}))
     guided = amounts * guide
 
     per_angstrom = wavelength_to_inverse_velocity(1.0)   # chopper-lib's own conversion

@@ -5,7 +5,9 @@ computed exactly by [`chopcal`](https://pypi.org/project/chopcal/): BIFROST in
 `bifrost_phasespace.ipynb`, T-REX in `trex_phasespace.ipynb`. What follows describes
 BIFROST's; T-REX's is the same figure, with its own settings (central wavelength L0,
 repetition rate multiplication of 4 to 24 in steps of 4, HF or HR), a zoom on its M
-choppers rather than on those near the source, and, so far, a perfect guide.
+choppers rather than on those near the source, an *M2 turned over* toggle, and guide
+transmission tables for its bispectral bender out and in (`trex_guide_transmission_bender_*.csv`),
+picked by a *bender in* toggle.
 
 - **Left:** the source over (emission time, wavelength), in neutrons per second into the
   guide's entrance, from `ess_butterfly.py`, with the region the chopper train transmits
