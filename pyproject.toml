@@ -6,8 +6,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "chopcal>=0.8",   # transmit_weighted, beam_aperture(at='centre'), arrival_moments
-    "tof",            # the ESS source library
-    "scipp",
     "numpy",
     "matplotlib",
     "ipympl",

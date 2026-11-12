@@ -3,9 +3,9 @@
 An interactive notebook showing the ESS source BIFROST sees put through its six choppers,
 computed exactly by [`chopcal`](https://pypi.org/project/chopcal/).
 
-- **Left:** the source intensity over (emission time, wavelength), from
-  [`tof`](https://tof.readthedocs.io)'s source library, with the region the chopper train
-  transmits outlined.
+- **Left:** the source over (emission time, wavelength), in neutrons per second into the
+  guide's entrance, from `ess_butterfly.py`, with the region the chopper train transmits
+  outlined.
 - **Right:** what reaches the sample, by arrival time and by wavelength (energy along the
   top). Dashed curves count the whole transmitted region as open; solid ones weight it by
   how likely each neutron is to get through while a disc's edge is still sweeping the beam.
@@ -23,12 +23,27 @@ as a harmonic of 14 Hz: the designed disks are rated to 210 Hz, the substitutes 
 now to 126 Hz. The speed chopcal picks, which a long burst can make slower, is shown under
 that control.
 
+Three controls change the source itself: the proton pulse's duration, the beam power at
+the full 2.857 ms pulse, and a factor on the moderator's decay times. The proton current
+is held fixed, so a shorter pulse delivers proportionally less power and fewer neutrons
+per pulse; the power it gives is shown under the control.
+The decay is fitted over the first few pulse lengths, so beyond about 9 ms it is an
+extrapolation; the factor shows how much the long-emission region depends on it.
+
 The *guide transmission* toggle, on by default, adds what reaches the sample through the
 real guide to the arrival-time plot, on a second axis. It also makes the wavelength plot
 show intensity through the guide, and weights the source on the left by it. The
 weight is the fraction of what enters the guide that reaches a 10 × 30 mm sample window,
 from `guide_transmission.csv`: a McStas scan of niess's BIFROST with the choppers removed
 (10⁶ rays per point, 0.5–12 Å). Outside that range it holds the end values.
+
+If the train opens more than one region of the source, the one transmitting the most is
+the main region, outlined in red; the others are spurious, outlined in purple. Both
+profiles then split what reaches the sample into the two, with the spurious part in
+purple (dotted red through the guide), and the title gives its total and its fraction of
+the main. It is usually many orders of magnitude down, so use *log intensities* to see
+it; the log axes reach down to it. That makes the decay-time factor matter: the
+spurious regions sit late in the pulse, where the source is extrapolated.
 
 Below those, each chopper's delay has its own slider. It follows chopcal whenever one of
 chopcal's inputs (lowest energy, shaping time, PSC limit) changes, unless its lock is
@@ -56,15 +71,17 @@ Without uv, any Python 3.11 or newer works:
 ```sh
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install "chopcal>=0.8" tof scipp numpy matplotlib ipympl ipywidgets jupyterlab
+pip install "chopcal>=0.8" numpy matplotlib ipympl ipywidgets jupyterlab
 jupyter lab bifrost_phasespace.ipynb
 ```
-
-The first run downloads the BIFROST source distribution (about 8 MB) into `tof`'s cache.
 
 ## Files
 
 - `bifrost_phasespace.ipynb`: the notebook.
+- `ess_butterfly.py`: McStas's `ESS_butterfly` moderator for any beamline (3 cm
+  moderator), as an absolute rate into (wavelength, emission time) bins. It is
+  independent of BIFROST and of the rest, and `python ess_butterfly.py` checks it against
+  McStas's own intensities into BIFROST's guide.
 - `guide_transmission.csv`: the guide's transmission against wavelength.
 - `polygonfigure.py`: the calculation and the plotting, in three layers usable on their
   own:

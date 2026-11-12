@@ -1,7 +1,8 @@
 """BIFROST's source intensity through its chopper train, from chopcal's exact regions.
 
-The ESS source BIFROST sees is tabulated by ``tof`` on a fine grid of (wavelength,
-emission time). chopcal builds the region of that plane the six choppers transmit --
+The ESS source BIFROST sees is McStas's ESS_butterfly for its beamline, W4, from
+`ess_butterfly`: an absolute rate, n/s, into the guide's entrance, binned on a fine grid of
+(wavelength, emission time). chopcal builds the region of that plane the six choppers transmit --
 exactly, as convex polygons -- and weights it by how likely each neutron is to get
 through a disc whose edge is still sweeping the beam. Integrating the gridded source over
 that weighted region gives what reaches the sample, by arrival time and by wavelength,
@@ -14,7 +15,7 @@ Three layers, so the same numbers serve a notebook and a static picture:
 - `bifrost_transmitted_phasespace_figure` wires both to ipywidgets controls.
 
 Needs chopcal >= 0.8 (`Region.transmit_weighted`, `beam_aperture(..., at='centre')`,
-`Region.arrival_moments`) and ``tof`` for the source distribution.
+`Region.arrival_moments`).
 """
 from __future__ import annotations
 
@@ -26,9 +27,12 @@ from pathlib import Path
 
 import numpy as np
 
-#: The ESS source distributions in ``tof`` are sampled this far from the moderator, and
-#: their emission times are counted there; chopcal measures its paths from the moderator.
-SOURCE_PLANE = 0.05  # m
+import ess_butterfly
+
+#: BIFROST's beam port, and the solid angle its guide's entrance, 68.70 x 34.45 mm at
+#: 1.9034 m from the moderator, takes from it (niess's BIFROST).
+BEAMLINE = ess_butterfly.Beamline('W', 4)
+GUIDE_SOLID_ANGLE = 0.068701 * 0.034454 / 1.90343 ** 2  # sr
 #: The fastest the designed pulse-shaping disks may turn, Hz: the 15th harmonic of 14 Hz.
 #: chopcal's own default is 196 Hz. The 126 Hz substitutes installed now are the 9th.
 PSC_SPEED_MAX = 210.0
@@ -37,25 +41,9 @@ DELAY_RANGES_MS = {'ps1': (-20.0, 20.0), 'ps2': (0.0, 40.0), 'fo1': (0.0, 25.0),
                    'fo2': (0.0, 40.0), 'bw1': (0.0, 180.0), 'bw2': (0.0, 180.0)}
 #: The pulse-shaping pair and the bandwidth pair each share a housing.
 GROUPS = [0, 0, 1, 2, 3, 3]
+#: The colour of what reaches the sample through a region the train is not designed for.
+SPURIOUS = 'C4'
 NAMES = ('ps1', 'ps2', 'fo1', 'fo2', 'bw1', 'bw2')
-
-
-@lru_cache(maxsize=4)
-def source_distribution(name: str = 'ess-bifrost'):
-    """The tabulated source, (wavelength, birth_time), as amounts on a fine uniform grid.
-
-    Read with bin-edge coordinates so that it can be rebinned: an amount per cell, spread
-    evenly over it, which is how chopcal reads a gridded source too.
-    """
-    import scipp as sc
-    from tof.facilities import get_source_path
-    data = sc.io.load_hdf5(get_source_path(name))
-    for dim in ('wavelength', 'birth_time'):
-        centres = data.coords[dim]
-        step = centres[1] - centres[0]
-        data.coords[dim] = sc.concat([centres - 0.5 * step, centres[-1:] + 0.5 * step], dim)
-    data.coords['birth_time'] = data.coords['birth_time'].to(unit='s')
-    return data
 
 
 #: BIFROST's guide transmission against wavelength, from McStas: what reaches a 10 x 30 mm
@@ -76,21 +64,10 @@ def guide_transmission(wavelength):
     return np.interp(wavelength, table, value)
 
 
-def rebinned(wavelength_edges, time_edges, name: str = 'ess-bifrost') -> np.ndarray:
-    """The source summed into these bins, shaped (time, wavelength) as chopcal wants it."""
-    import scipp as sc
-    data = source_distribution(name)
-    out = data.rebin(wavelength=sc.array(dims=['wavelength'], values=wavelength_edges,
-                                         unit='angstrom'),
-                     birth_time=sc.array(dims=['birth_time'], values=time_edges, unit='s'))
-    return np.ascontiguousarray(out.transpose(['birth_time', 'wavelength']).values)
-
-
 def trains(energy_min: float, shaping_time: float,
            pulse_shaping_speed_max: float = PSC_SPEED_MAX,
            pulse_delay: float = 0.0, delays: dict | None = None):
-    """BIFROST's discs twice over, with paths from the source plane rather than the
-    moderator: once with the beam's inner-corner aperture, which bounds where anything
+    """BIFROST's discs twice over: once with the beam's inner-corner aperture, which bounds where anything
     gets through, and once with its centre aperture, which sets the ramps a weighted
     transmission models.
 
@@ -117,7 +94,7 @@ def trains(energy_min: float, shaping_time: float,
     def moved(name, aperture):
         disc = settings[name]
         return Chopper(disc.speed, delays.get(name, disc.delay) + pulse_delay, disc.beam,
-                       list(disc.edges), disc.path - SOURCE_PLANE, aperture)
+                       list(disc.edges), disc.path, aperture)
 
     support = [moved(n, settings[n].aperture) for n in NAMES]
     ramped = [moved(n, centre['wide' if n.startswith('bw') else 'narrow']) for n in NAMES]
@@ -128,8 +105,8 @@ def trains(energy_min: float, shaping_time: float,
 class Transmission:
     """Everything one setting produces, in plain arrays."""
     wavelength_edges: np.ndarray        # Å
-    time_edges: np.ndarray              # s, at the source plane
-    source: np.ndarray                  # (time, wavelength) amount per bin
+    time_edges: np.ndarray              # s, emission at the moderator
+    source: np.ndarray                  # (time, wavelength) n/s per bin into the guide
     outline: list                       # transmitted polygons as [(t, λ), ...]
     arrival_edges: np.ndarray           # s, at the sample
     at_sample: np.ndarray               # weighted amount per arrival bin
@@ -147,7 +124,7 @@ class Transmission:
     #: (name, distance from the moderator in m) for each chopper, then the sample
     positions: list
     #: for each entry of `positions`, the (time, distance) outlines of the neutrons that
-    #: got through every chopper before it, swept from the source plane up to it
+    #: got through every chopper before it, swept from the moderator up to it
     stages: list
     #: for each chopper, the (start, end) times in s that any of the beam can pass it,
     #: from 0 to past the latest time in `stages`
@@ -156,6 +133,16 @@ class Transmission:
     guide: np.ndarray
     at_sample_guide: np.ndarray         # `at_sample` through the real guide
     transmitted_guide: float            # `transmitted` through the real guide
+    #: for each polygon of `outline`, whether it is part of the main region -- the one
+    #: transmitting the most -- or of a spurious one
+    main: list
+    #: the parts of `at_sample`, `by_wavelength`, `transmitted` and their guided
+    #: versions that come through the spurious regions
+    at_sample_spurious: np.ndarray
+    by_wavelength_spurious: np.ndarray
+    transmitted_spurious: float
+    at_sample_guide_spurious: np.ndarray
+    transmitted_guide_spurious: float
 
 
 def open_windows(chopper, until: float):
@@ -192,14 +179,56 @@ def swept(vertices, l0: float, l1: float):
     return [*zip(times.max(axis=1), ls), *zip(times.min(axis=1)[::-1], ls[::-1])]
 
 
+def _segment_distance(points, vertices):
+    """The distance from each of `points` (N, 2) to the boundary of a convex polygon."""
+    a = np.asarray(vertices, dtype=float)
+    b = np.roll(a, -1, axis=0)
+    d = b - a
+    length = np.maximum((d * d).sum(axis=1), 1e-300)
+    rel = points[:, None, :] - a[None]                                    # (N, M, 2)
+    f = np.clip((rel * d[None]).sum(axis=2) / length, 0.0, 1.0)
+    return np.hypot(*np.moveaxis(rel - f[..., None] * d[None], 2, 0)).min(axis=1)
+
+
+def regions(polygons, scale):
+    """The convex pieces grouped into connected regions, as lists of indices.
+
+    chopcal returns a region as convex pieces that share edges; pieces of one region
+    touch, distinct regions do not. `scale` (2,) makes the coordinates comparable.
+    """
+    shapes = [np.asarray(p, dtype=float) / scale for p in polygons]
+    group = list(range(len(shapes)))
+
+    def root(i):
+        while group[i] != i:
+            i = group[i]
+        return i
+
+    for i, j in combinations(range(len(shapes)), 2):
+        gap = min(_segment_distance(shapes[i], shapes[j]).min(),
+                  _segment_distance(shapes[j], shapes[i]).min())
+        if gap < 1e-6:
+            group[root(i)] = root(j)
+    out = {}
+    for i in range(len(shapes)):
+        out.setdefault(root(i), []).append(i)
+    return list(out.values())
+
+
 def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
                  latest_emission=3e-3, wavelength_bin=0.02, time_bin=20e-6,
                  arrival_bins=400, pulse_shaping_speed_max=PSC_SPEED_MAX, pulse_delay=0.0,
-                 delays=None, source='ess-bifrost') -> Transmission:
+                 delays=None, power=ess_butterfly.REFERENCE_POWER,
+                 pulse_duration=ess_butterfly.PULSE_DURATION,
+                 decay_scale=1.0) -> Transmission:
     """The source in a (wavelength, emission time) rectangle, through BIFROST's train.
 
     The rectangle is the source polygon chopcal transmits and the extent of the gridded
-    source; the bin sizes set the grid. `pulse_delay` moves every disc together; see
+    source; the bin sizes set the grid. The source is the rate into the guide's entrance,
+    n/s, from `ess_butterfly`, with the proton pulse lasting `pulse_duration` (s) and the
+    moderator's decay times multiplied by `decay_scale`. `power` (MW) is the beam's at the
+    design pulse length: the proton current stays the same, so a shorter pulse delivers
+    proportionally fewer protons, and neutrons, per pulse. `pulse_delay` moves every disc together; see
     `trains`. Everything reaching the sample is for a perfect guide; `at_sample_guide` and
     `transmitted_guide` weight the source by `guide_transmission` as well. Times in s,
     wavelengths in Å.
@@ -210,7 +239,9 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
     low, high = sorted(wavelength_range)
     wavelength_edges = np.arange(low, high + 0.5 * wavelength_bin, wavelength_bin)
     time_edges = np.arange(0.0, latest_emission + 0.5 * time_bin, time_bin)
-    amounts = rebinned(wavelength_edges, time_edges, source)
+    amounts = BEAMLINE.intensity(wavelength_edges, time_edges, GUIDE_SOLID_ANGLE,
+                                 power=power * pulse_duration / ess_butterfly.PULSE_DURATION,
+                                 duration=pulse_duration, decay_scale=decay_scale)
     # ponytail: at bin centres, fine while the table is smooth on the bin size
     guide = guide_transmission(0.5 * (wavelength_edges[1:] + wavelength_edges[:-1]))
     guided = amounts * guide
@@ -225,7 +256,7 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
     support = rectangle.transmit(support_train)
     weighted = rectangle.transmit_weighted(ramped_train, GROUPS)
 
-    distance = c.INSTRUMENT_LENGTH - SOURCE_PLANE
+    distance = c.INSTRUMENT_LENGTH
     if support:
         reached = [t + distance * u for p in support.polygons for u, t in p.vertices]
         first, last = min(reached), max(reached)
@@ -243,19 +274,45 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
 
     outline = [[(t, u / per_angstrom) for u, t in p.vertices] for p in support.polygons]
 
-    # what gets through the first k choppers, swept from the source plane to the next one
+    # what gets through the first k choppers, swept from the moderator to the next one
     stops = [(n, d.path) for n, d in zip(NAMES, support_train)] + [('sample', distance)]
     stages, through = [], rectangle
     for k, (_, stop) in enumerate(stops):
         if k:
             through = through.transmit([support_train[k - 1]])
-        stages.append([[(t, l + SOURCE_PLANE) for t, l in swept(p.vertices, 0.0, stop)]
-                       for p in through.polygons])
-    positions = [(n, stop + SOURCE_PLANE) for n, stop in stops]
+        stages.append([swept(p.vertices, 0.0, stop) for p in through.polygons])
+    positions = stops
     until = 1.1 * max((t for polygons in stages for q in polygons for t, _ in q),
                       default=1 / 14)
     openings = [open_windows(chopper, until) for chopper in support_train]
     at_sample, at_sample_support = moments(weighted), moments(support)
+
+    # the main region and the spurious ones: every cell the train opens goes to the
+    # region nearest it -- inside one, its own boundary is nearer than any other's
+    # ponytail: a cell straddling two regions goes whole to one; they are far apart
+    vertices = [p.vertices for p in support.polygons]
+    groups = regions(vertices, (np.diff(inverse_velocities[:2])[0], time_bin))
+    spurious_cells = np.zeros(amounts.shape, dtype=bool)
+    main = [True] * len(vertices)
+    if len(groups) > 1:
+        open_cells = np.argwhere(support.coverage(inverse_velocities, time_edges) > 0)
+        centres = np.column_stack([
+            0.5 * (inverse_velocities[open_cells[:, 1]]
+                   + inverse_velocities[open_cells[:, 1] + 1]),
+            0.5 * (time_edges[open_cells[:, 0]] + time_edges[open_cells[:, 0] + 1])])
+        scale = np.array([np.diff(inverse_velocities[:2])[0], time_bin])
+        distances = np.array([
+            np.min([_segment_distance(centres / scale, np.asarray(vertices[i]) / scale)
+                    for i in g], axis=0) for g in groups])
+        nearest = distances.argmin(axis=0)
+        shares = [weighted.integrate(np.where(_cells(open_cells[nearest == k], amounts),
+                                              amounts, 0.0), inverse_velocities, time_edges)
+                  for k in range(len(groups))]
+        first = int(np.argmax(shares))
+        spurious_cells = _cells(open_cells[nearest != first], amounts)
+        main = [i in groups[first] for i in range(len(vertices))]
+    spurious = np.where(spurious_cells, amounts, 0.0)
+    guided_spurious = spurious * guide
     return Transmission(
         wavelength_edges=wavelength_edges, time_edges=time_edges, source=amounts,
         outline=outline, arrival_edges=arrival_edges,
@@ -268,7 +325,24 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
         at_sample_guide=weighted.arrivals(guided, inverse_velocities, time_edges, distance,
                                           arrival_edges).sum(axis=1),
         transmitted_guide=weighted.integrate(guided, inverse_velocities, time_edges),
-        positions=positions, stages=stages, openings=openings)
+        positions=positions, stages=stages, openings=openings, main=main,
+        at_sample_spurious=weighted.arrivals(spurious, inverse_velocities, time_edges,
+                                             distance, arrival_edges).sum(axis=1),
+        by_wavelength_spurious=(spurious
+                                * weighted.coverage(inverse_velocities, time_edges)).sum(axis=0),
+        transmitted_spurious=weighted.integrate(spurious, inverse_velocities, time_edges),
+        at_sample_guide_spurious=weighted.arrivals(
+            guided_spurious, inverse_velocities, time_edges, distance,
+            arrival_edges).sum(axis=1),
+        transmitted_guide_spurious=weighted.integrate(guided_spurious, inverse_velocities,
+                                                      time_edges))
+
+
+def _cells(indices, like):
+    """A boolean mask shaped `like`, True at the (time, wavelength) `indices`."""
+    mask = np.zeros(like.shape, dtype=bool)
+    mask[tuple(indices.T)] = True
+    return mask
 
 
 # -- wavelength and energy --------------------------------------------------------------
@@ -349,13 +423,18 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
         norm = LogNorm(vmin=positive.max() * 1e-4, vmax=positive.max())
     else:
         norm = Normalize(vmin=0.0, vmax=positive.max())
-    mesh = left.pcolormesh(t * 1e3, w, density.T, norm=norm, cmap='viridis',
+    # nothing left at all (short wavelengths, long after the pulse) is the bottom colour
+    import matplotlib
+    cmap = matplotlib.colormaps['viridis']
+    cmap = cmap.with_extremes(bad=cmap(0.0), under=cmap(0.0))
+    mesh = left.pcolormesh(t * 1e3, w, density.T, norm=norm, cmap=cmap,
                            shading='flat', rasterized=True)
-    for polygon in result.outline:
+    for polygon, main in zip(result.outline, result.main):
         left.add_patch(Polygon([(a * 1e3, b) for a, b in polygon], closed=True,
                                fill=False, edgecolor='white', linewidth=1.6))
         left.add_patch(Polygon([(a * 1e3, b) for a, b in polygon], closed=True,
-                               fill=False, edgecolor='crimson', linewidth=0.9))
+                               fill=False, edgecolor='crimson' if main else SPURIOUS,
+                               linewidth=0.9))
     left.set_xlim(t[0] * 1e3, t[-1] * 1e3)
     left.set_ylim(w[0], w[-1])
     left.set_xlabel('emission time at the source [ms]')
@@ -363,11 +442,11 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     energy = left.secondary_yaxis('right', functions=(_energy, _wavelength))
     _energy_axis(energy.yaxis, (w[0], w[-1]))
     energy.set_ylabel('energy [meV]')
-    left.set_title(('source through the guide' if guide else 'source')
+    left.set_title(('source through the guide' if guide else 'source into the guide')
                    + ', and the region the train transmits', fontsize='medium')
     if colorbar is None:
         colorbar = left.figure.colorbar(mesh, ax=left, location='bottom', shrink=0.8,
-                                        label='source intensity [per ms per Å, arb.]')
+                                        label='source [n/s per ms per Å]')
     else:
         colorbar.update_normal(mesh)
 
@@ -375,47 +454,62 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     step = np.diff(a)
     time.stairs(result.at_sample_support / step, a, color='0.6', linestyle='--',
                 label='whole region open')
-    time.stairs(result.at_sample / step, a, color='C0', linewidth=1.5,
-                label='weighted by transmission')
+    spurious = result.transmitted_spurious > 0
+    time.stairs((result.at_sample - result.at_sample_spurious) / step, a, color='C0',
+                linewidth=1.5, label='weighted, main region' if spurious
+                else 'weighted by transmission')
+    if spurious:
+        time.stairs(result.at_sample_spurious / step, a, color=SPURIOUS, linewidth=1.3,
+                    label='weighted, spurious')
     time.set_xlabel('arrival time at the sample [ms]')
-    time.set_ylabel('intensity [per ms, arb.]')
+    time.set_ylabel('intensity [n/s per ms]')
     time.set_xlim(a[0], a[-1])
     handles = time.get_legend_handles_labels()[0]
     if guide:   # an order of magnitude below, so on its own axis
         guided = time.twinx()
         guided.set_label('guided')
-        guided.stairs(result.at_sample_guide / step, a, color='C3', linewidth=1.3,
-                      label='through the guide')
+        guided.stairs((result.at_sample_guide - result.at_sample_guide_spurious) / step, a,
+                      color='C3', linewidth=1.3, label='through the guide')
+        if spurious:
+            guided.stairs(result.at_sample_guide_spurious / step, a, color='C3',
+                          linestyle=':', linewidth=1.3, label='spurious, through the guide')
         guided.set_ylim(bottom=0.0)
-        guided.set_ylabel('through the guide [per ms, arb.]', color='C3')
+        guided.set_ylabel('through the guide [n/s per ms]', color='C3')
         guided.tick_params(axis='y', colors='C3')
         handles += guided.get_legend_handles_labels()[0]
         if log:
-            _log_intensity(guided, result.at_sample_guide / step)
+            _log_intensity(guided, result.at_sample_guide / step,
+                           result.at_sample_guide_spurious / step)
     time.legend(handles=handles, loc='upper left',
                 bbox_to_anchor=(1.2 if guide else 1.01, 1.0), fontsize='small')
     if log:
-        _log_intensity(time, result.at_sample_support / step)
+        _log_intensity(time, result.at_sample_support / step,
+                       result.at_sample_spurious / step)
 
     wstep = np.diff(w)
     # the guide weights each wavelength bin by its own transmission, so it multiplies these
     through = result.guide if guide else 1.0
     wavelength.stairs(result.by_wavelength_support * through / wstep, w, color='0.6',
                       linestyle='--', label='whole region open')
-    wavelength.stairs(result.by_wavelength * through / wstep, w, color='C1', linewidth=1.5,
-                      label='weighted by transmission')
+    wavelength.stairs((result.by_wavelength - result.by_wavelength_spurious) * through
+                      / wstep, w, color='C1', linewidth=1.5,
+                      label='weighted, main region' if spurious else 'weighted by transmission')
+    if spurious:
+        wavelength.stairs(result.by_wavelength_spurious * through / wstep, w,
+                          color=SPURIOUS, linewidth=1.3, label='weighted, spurious')
     reached = np.nonzero(result.by_wavelength_support)[0]
     if reached.size:
         lo, hi = w[max(reached[0] - 2, 0)], w[min(reached[-1] + 3, len(w) - 1)]
         wavelength.set_xlim(lo, hi)
     wavelength.set_xlabel('wavelength [Å]')
     wavelength.set_ylabel(('through the guide ' if guide else 'intensity ')
-                          + '[per Å, arb.]')
+                          + '[n/s per Å]')
     top = wavelength.secondary_xaxis('top', functions=(_energy, _wavelength))
     _energy_axis(top.xaxis, wavelength.get_xlim())
     top.set_xlabel('energy [meV]')
     if log:
-        _log_intensity(wavelength, result.by_wavelength_support * through / wstep)
+        _log_intensity(wavelength, result.by_wavelength_support * through / wstep,
+                       result.by_wavelength_spurious * through / wstep)
     # the wavelength spread of what arrives together, against its mean wavelength
     spread = wavelength.twinx()
     spread.set_label('spread')
@@ -432,10 +526,15 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
 
     fraction = result.transmitted / result.emitted if result.emitted else 0.0
     text = title + '\n' if title else ''
-    through = (f',\n{result.transmitted_guide / result.emitted:.3%} through the guide'
+    through = (f',\n{result.transmitted_guide:.3g} n/s '
+               f'({result.transmitted_guide / result.emitted:.3%}) through the guide'
                if guide and result.emitted else '')
-    time.set_title(f'{text}{fraction:.3%} of the source rectangle reaches the sample'
-                   f'{through}', fontsize='medium')
+    if spurious:
+        main_total = result.transmitted - result.transmitted_spurious
+        through += (f',\nspurious regions {result.transmitted_spurious:.3g} n/s, '
+                    f'{result.transmitted_spurious / main_total:.2g} of the main')
+    time.set_title(f'{text}{result.transmitted:.3g} n/s ({fraction:.3%} of the source '
+                   f'rectangle) reach the sample{through}', fontsize='medium')
     # the whole instrument, then the choppers in its first quarter, where most is stopped
     near = [at for _, at in result.positions if at < 0.25 * result.positions[-1][1]]
     for ax, top in zip(rest, (None, 1.15 * max(near))):
@@ -452,12 +551,16 @@ def _latest_below(polygon, top):
     return max(times, default=0.0)
 
 
-def _log_intensity(ax, values):
-    """A log intensity axis from 1e-4 of the peak of `values` to just above it."""
+def _log_intensity(ax, values, spurious=None):
+    """A log intensity axis from 1e-4 of the peak of `values` to just above it, or
+    lower, to a tenth of the peak of `spurious`, if that is lower still."""
     peak = values.max(initial=0.0)
     if peak > 0:
+        low = peak * 1e-4
+        if spurious is not None and spurious.max(initial=0.0) > 0:
+            low = min(low, 0.1 * spurious.max())
         ax.set_yscale('log')
-        ax.set_ylim(peak * 1e-4, peak * 2)
+        ax.set_ylim(low, peak * 2)
 
 
 def draw_time_distance(result: Transmission, ax, top: float | None = None):
@@ -571,8 +674,16 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                                   description='lowest energy [meV]'),
         'shaping_time': FloatSlider(value=t_psc, min=0.05, max=4.0, step=0.05,
                                     description='shaping time [ms]'),
-        'latest_emission': FloatSlider(value=6.0, min=0.5, max=12.0, step=0.1,
+        'latest_emission': FloatSlider(value=6.0, min=0.5, max=20.0, step=0.1,
                                        description='last emission [ms]'),
+        # the source: the proton current stays the same, so a shorter pulse is less power
+        'pulse_duration': FloatSlider(value=ess_butterfly.PULSE_DURATION * 1e3, min=0.1,
+                                      max=3.0, step=0.01, readout_format='.3f',
+                                      description='proton pulse [ms]'),
+        'power': FloatSlider(value=ess_butterfly.REFERENCE_POWER, min=0.1, max=5.0,
+                             step=0.1, description='power at full pulse [MW]'),
+        'decay_scale': FloatSlider(value=1.0, min=0.25, max=4.0, step=0.05,
+                                   description='decay time ×'),
         'wavelength_range': FloatRangeSlider(value=(1.0, 6.0), min=0.2, max=19.9, step=0.1,
                                              description='wavelengths [Å]'),
         'time_bin': FloatSlider(value=20.0, min=6.0, max=200.0, step=2.0,
@@ -626,6 +737,7 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
         fig, axes = make_axes()
     status = Label()
     psc = Label()   # what chopcal picked: the fastest harmonic the burst allows
+    power = Label()   # what the beam delivers with this pulse
 
     def update(*_):
         if state['syncing']:
@@ -638,7 +750,9 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                               time_bin=v['time_bin'] * 1e-6,
                               pulse_delay=v['pulse_delay'] * 1e-6,
                               pulse_shaping_speed_max=v['psc_speed_max'],
-                              delays={n: w.value * 1e-3 for n, w in delays.items()})
+                              delays={n: w.value * 1e-3 for n, w in delays.items()},
+                              power=v['power'], pulse_duration=v['pulse_duration'] * 1e-3,
+                              decay_scale=v['decay_scale'])
         state['colorbar'] = draw(result, axes, colorbar=state['colorbar'], log=v['log'],
                                  guide=v['guide'])
         fig.canvas.draw_idle()
@@ -647,6 +761,8 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
         slower = (' -- slower than the limit, for a burst this long'
                   if result.psc_speed < v['psc_speed_max'] else '')
         psc.value = f'PSC turns at {result.psc_speed:g} Hz{slower}'
+        delivered = v['power'] * v['pulse_duration'] * 1e-3 / ess_butterfly.PULSE_DURATION
+        power.value = f'beam power {delivered:.2f} MW with this pulse'
 
     for name in chopcal_inputs:   # before `update`, so the delays are chopcal's first
         controls[name].observe(follow_chopcal, names='value')
@@ -656,6 +772,7 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
     update()
     widgets = list(controls.values())
     widgets.insert(widgets.index(controls['psc_speed_max']) + 1, psc)
+    widgets.insert(widgets.index(controls['power']) + 1, power)
     rows = [HBox([delays[n], frozen[n], suggested[n]]) for n in NAMES]
     return HBox([fig.canvas, VBox([*widgets, status, HTML('<b>chopper delays</b>'), *rows])])
 
@@ -691,7 +808,7 @@ if __name__ == '__main__':
     per_angstrom = wavelength_to_inverse_velocity(1.0)
     for (_, at), windows in zip(result.positions, result.openings):
         for polygon in result.outline:
-            times = [t + (at - SOURCE_PLANE) * w * per_angstrom for t, w in polygon]
+            times = [t + at * w * per_angstrom for t, w in polygon]
             assert any(a - 1e-9 <= min(times) and max(times) <= b + 1e-9
                        for a, b in windows), at
     # the guide only removes neutrons, least at long wavelengths
@@ -706,6 +823,23 @@ if __name__ == '__main__':
                                pulse_shaping_speed_max=PSC_SPEED_MAX)
     moved = transmission(delays={n: settings[n].delay + 1e-4 for n in NAMES})
     assert np.allclose(moved.outline, transmission(pulse_delay=1e-4).outline)
+    # a long emission window opens a second, spurious region, far weaker than the main;
+    # its parts are within the totals, and the main region is the one designed
+    late = transmission(latest_emission=15e-3, wavelength_range=(1.0, 8.0))
+    assert late.main.count(False) >= 1 and result.main == [True] * len(result.outline)
+    assert 0 < late.transmitted_spurious < 1e-6 * late.transmitted
+    assert np.isclose(late.at_sample_spurious.sum(), late.transmitted_spurious)
+    assert np.isclose(late.transmitted - late.transmitted_spurious, result.transmitted,
+                      rtol=0.02)
+    assert all(min(t for t, _ in late.outline[i]) > 5e-3
+               for i, main in enumerate(late.main) if not main)
+    # the source knobs: power scales everything; at the same current, half the pulse is
+    # half the neutrons, once the window holds all of both pulses
+    assert np.isclose(transmission(power=2.5).transmitted, 0.5 * result.transmitted)
+    whole = transmission(latest_emission=20e-3).emitted
+    half = transmission(latest_emission=20e-3,
+                        pulse_duration=ess_butterfly.PULSE_DURATION / 2).emitted
+    assert np.isclose(half, 0.5 * whole, rtol=1e-3), half / whole
 
     # the delay sliders follow chopcal until frozen, and keep a hand-set value until one
     # of chopcal's inputs changes
