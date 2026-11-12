@@ -21,7 +21,8 @@ choppers rather than on those near the source, and, so far, a perfect guide.
   chopper is a line with gaps where it is open.
 
 The controls set the lowest energy and pulse-shaping time chopcal places the band at, the
-source rectangle and the grid it is binned on, a pulse delay that moves every disc
+source rectangle and the grid it is binned on (with the arrival-time grid, whose bins
+the wavelength moments are taken over), a pulse delay that moves every disc
 together (as ESS's `BeamPosDly-S` does), and the fastest the pulse-shaping disks may turn,
 as a harmonic of 14 Hz: the designed disks are rated to 210 Hz, the substitutes installed
 now to 126 Hz. The speed chopcal picks, which a long burst can make slower, is shown under

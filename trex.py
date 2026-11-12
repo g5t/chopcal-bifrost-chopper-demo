@@ -73,7 +73,9 @@ class Trex(Instrument):
     delay_ranges_ms = {n: (0.0, round(1e3 * T_OFFSET + PHASING[n] * 8 / c.H_OVER_M * 1e3 + 5))
                        for n in EDGES}
     guide_table = None   # ponytail: perfect guide until T-REX has a McStas scan of its own
-    zoom = (157.0, 164.5)   # the monochromating pair and the sample
+    wavelength_bin = 0.005
+    time_bin = 10e-6
+    arrival_bin = 10e-6   # a band takes a few hundred µs to arrive
     wavelength_range = (1.0, 4.0)
     latest_emission = 6e-3
 
@@ -113,6 +115,14 @@ class Trex(Instrument):
             'mode': ToggleButtons(options=['HF', 'HR'], value=mode, description='mode'),
         }
 
+    def zoom(self, wavelength=2.4, rrm=4, mode='HF'):
+        """The M pair and the sample, around the L0 band: from a band spacing before it
+        reaches 157 m to one after it reaches 164.5 m."""
+        low, high = 157.0, 164.5
+        spacing = 1 / (rrm * FREQUENCY)
+        arrive = [T_OFFSET + at * wavelength / c.H_OVER_M for at in (low, high)]
+        return low, high, arrive[0] - spacing, arrive[1] + spacing
+
     def note(self, result, values):
         speed = speeds(values['rrm'])
         return (f"P at {abs(speed['p1']):g} Hz, M at {speed['m1']:g} Hz; "
@@ -147,6 +157,14 @@ if __name__ == '__main__':
     # the delays are the instr's: T_OFFSET plus the central neutron's flight
     for (disc, _), n in zip(TREX.choppers(wavelength=2.4), TREX.names):
         assert np.isclose(disc.delay, T_OFFSET + PHASING[n] * 2.4 / c.H_OVER_M)
+    # the M zoom holds the central neutron's arrival at the M pair, and no more than the
+    # neighbouring bands; the arrival grid resolves a band: many bins with a σλ
+    low, high, start, end = result.zoom
+    at_m = T_OFFSET + PATH['m1'] * 2.4 / c.H_OVER_M
+    assert low < PATH['m1'] < high and start < at_m < end
+    assert end - start < 3 / (4 * FREQUENCY) + (high - low) * 2.4 / c.H_OVER_M
+    mean, sigma = result.spread
+    assert np.sum(np.isfinite(sigma) & (abs(mean - 2.4) < 0.1)) > 10
     # every allowed RRM turns every disc at a multiple of 14 Hz
     for rrm in RRM:
         assert all(abs(v) % FREQUENCY == 0 for v in speeds(rrm).values()), rrm

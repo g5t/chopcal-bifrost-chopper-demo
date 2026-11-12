@@ -52,11 +52,13 @@ class Instrument:
     #: what reaches the sample over what enters the guide, a CSV of wavelength (Å),
     #: fraction and its error; None for a perfect guide
     guide_table: Path | None = None
-    #: (from, to) m, the stretch of the instrument the second time-distance panel shows;
-    #: None for the choppers near the source
-    zoom: tuple | None = None
     wavelength_range: tuple = (1.0, 6.0)   # Å, the figure's starting source rectangle
     latest_emission: float = 6e-3          # s, the same
+    wavelength_bin: float = 0.02           # Å, the source grid
+    time_bin: float = 20e-6                # s, the same
+    #: s, the arrival-time grid at the sample: what the moments of wavelength are per bin,
+    #: so it must be finer than a band takes to arrive
+    arrival_bin: float = 200e-6
 
     def choppers(self, **settings) -> list:
         """(disc, centre aperture) for every disc, in `names` order: a chopcal `Chopper`
@@ -72,6 +74,12 @@ class Instrument:
     def settings(self, values: dict) -> dict:
         """`choppers`' keyword arguments from the controls' values."""
         return values
+
+    def zoom(self, **settings) -> tuple | None:
+        """The stretch of the instrument the second time-distance panel shows, (from, to)
+        in m, and optionally the times it shows, (from, to) in s after them; None for the
+        choppers near the source."""
+        return None
 
     def note(self, result: 'Transmission', values: dict) -> str:
         """A line shown under the instrument's controls."""
@@ -229,8 +237,8 @@ def regions(polygons, scale):
 
 
 def transmission(instrument: Instrument, settings: dict | None = None,
-                 wavelength_range=None, latest_emission=None, wavelength_bin=0.02,
-                 time_bin=20e-6, arrival_bins=400, pulse_delay=0.0, delays=None,
+                 wavelength_range=None, latest_emission=None, wavelength_bin=None,
+                 time_bin=None, arrival_bin=None, pulse_delay=0.0, delays=None,
                  power=ess_butterfly.REFERENCE_POWER,
                  pulse_duration=ess_butterfly.PULSE_DURATION,
                  decay_scale=1.0, parked=()) -> Transmission:
@@ -255,6 +263,9 @@ def transmission(instrument: Instrument, settings: dict | None = None,
     names = instrument.names
     low, high = sorted(wavelength_range or instrument.wavelength_range)
     latest_emission = latest_emission or instrument.latest_emission
+    wavelength_bin = wavelength_bin or instrument.wavelength_bin
+    time_bin = time_bin or instrument.time_bin
+    arrival_bin = arrival_bin or instrument.arrival_bin
     wavelength_edges = np.arange(low, high + 0.5 * wavelength_bin, wavelength_bin)
     time_edges = np.arange(0.0, latest_emission + 0.5 * time_bin, time_bin)
     amounts = instrument.beamline.intensity(wavelength_edges, time_edges,
@@ -282,9 +293,10 @@ def transmission(instrument: Instrument, settings: dict | None = None,
         reached = [t + distance * u for p in support.polygons for u, t in p.vertices]
         first, last = min(reached), max(reached)
         margin = 0.02 * (last - first)
-        arrival_edges = np.linspace(first - margin, last + margin, arrival_bins + 1)
+        first, last = first - margin, last + margin
     else:
-        arrival_edges = np.linspace(0.0, 1 / 14, arrival_bins + 1)
+        first, last = 0.0, 1 / 14
+    arrival_edges = first + arrival_bin * np.arange(ceil((last - first) / arrival_bin) + 1)
 
     def moments(region):
         return region.arrival_moments(amounts, inverse_velocities, time_edges, distance,
@@ -358,7 +370,7 @@ def transmission(instrument: Instrument, settings: dict | None = None,
             arrival_edges).sum(axis=1),
         transmitted_guide_spurious=weighted.integrate(guided_spurious, inverse_velocities,
                                                       time_edges),
-        zoom=instrument.zoom)
+        zoom=instrument.zoom(**(settings or {})))
 
 
 def _cells(indices, like):
@@ -600,7 +612,7 @@ def draw_time_distance(result: Transmission, ax, window: tuple | None = None):
     the next one does not cover is what that chopper stops. The last band, to the
     sample, is the outlined region. Each chopper is a line broken where it is open.
     `window` (m), (from, to), shows only that stretch of the instrument, over the times
-    the bands reach it.
+    the bands reach it -- or over (from, to) in s, if it gives those after the distances.
     """
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon
@@ -616,12 +628,15 @@ def draw_time_distance(result: Transmission, ax, window: tuple | None = None):
                                  linewidth=0.8, label=label))
             label = None
     sample = result.positions[-1][1]
-    low, top = window or (0.0, sample)
-    times = [t for polygons in result.stages for p in polygons
-             for t in _times_between(p, low, top)] or [0.0, 1 / 14]
-    margin = 0.03 * (max(times) - min(times))
-    start = 0.0 if low == 0 else max(min(times) - margin, 0.0)
-    end = max(times) + margin
+    low, top, *span = window or (0.0, sample)
+    if span:
+        start, end = span
+    else:
+        times = [t for polygons in result.stages for p in polygons
+                 for t in _times_between(p, low, top)] or [0.0, 1 / 14]
+        margin = 0.03 * (max(times) - min(times))
+        start = 0.0 if low == 0 else max(min(times) - margin, 0.0)
+        end = max(times) + margin
     # each disc closed between its openings; a pair's lines lie on top of each other, so
     # its gaps show only where both discs are open
     for (_, at), windows in zip(result.positions, result.openings):
@@ -702,8 +717,8 @@ def ensure_widget_backend(quiet: bool = False) -> bool:
 
 
 def _figure(instrument: Instrument, **initial):
-    from ipywidgets import (Checkbox, FloatRangeSlider, FloatSlider, HBox, HTML, Label,
-                            Layout, ToggleButton, VBox)
+    from ipywidgets import (Checkbox, FloatLogSlider, FloatRangeSlider, FloatSlider, HBox,
+                            HTML, Label, Layout, ToggleButton, VBox)
     import matplotlib.pyplot as plt
 
     style = {'description_width': '9em'}
@@ -724,10 +739,16 @@ def _figure(instrument: Instrument, **initial):
                              step=0.1, description='power at full pulse [MW]'),
         'decay_scale': FloatSlider(value=1.0, min=0.25, max=4.0, step=0.05,
                                    description='decay time ×'),
-        'time_bin': FloatSlider(value=20.0, min=6.0, max=200.0, step=2.0,
-                                description='time bin [µs]'),
-        'wavelength_bin': FloatSlider(value=0.02, min=0.02, max=0.5, step=0.01,
-                                      description='wavelength bin [Å]'),
+        # the grids, on log scales: an instrument selecting narrow strips needs fine ones
+        'time_bin': FloatLogSlider(value=instrument.time_bin * 1e6, min=0, max=np.log10(200),
+                                   step=0.05, readout_format='.3g',
+                                   description='time bin [µs]'),
+        'wavelength_bin': FloatLogSlider(value=instrument.wavelength_bin, min=-3,
+                                         max=np.log10(0.5), step=0.05, readout_format='.3g',
+                                         description='wavelength bin [Å]'),
+        'arrival_bin': FloatLogSlider(value=instrument.arrival_bin * 1e6, min=0, max=3,
+                                      step=0.05, readout_format='.3g',
+                                      description='arrival bin [µs]'),
         'pulse_delay': FloatSlider(value=0.0, min=-1000.0, max=1000.0, step=10.0,
                                    description='pulse delay [µs]'),
         'log': Checkbox(value=False, description='log intensities'),
@@ -785,6 +806,7 @@ def _figure(instrument: Instrument, **initial):
                               latest_emission=v['latest_emission'] * 1e-3,
                               wavelength_bin=v['wavelength_bin'],
                               time_bin=v['time_bin'] * 1e-6,
+                              arrival_bin=v['arrival_bin'] * 1e-6,
                               pulse_delay=v['pulse_delay'] * 1e-6,
                               delays={n: w.value * 1e-3 for n, w in delays.items()},
                               power=v['power'], pulse_duration=v['pulse_duration'] * 1e-3,
