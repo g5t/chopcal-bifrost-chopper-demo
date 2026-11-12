@@ -23,9 +23,10 @@ as a harmonic of 14 Hz: the designed disks are rated to 210 Hz, the substitutes 
 now to 126 Hz. The speed chopcal picks, which a long burst can make slower, is shown under
 that control.
 
-Three controls change the source itself: the proton pulse's duration, the beam power, and
-a factor on the moderator's decay times. A shorter pulse keeps the neutrons per pulse, as
-McStas has it. If the proton current is unchanged, lower the power by the same factor too.
+Three controls change the source itself: the proton pulse's duration, the beam power at
+the full 2.857 ms pulse, and a factor on the moderator's decay times. The proton current
+is held fixed, so a shorter pulse delivers proportionally less power and fewer neutrons
+per pulse; the power it gives is shown under the control.
 The decay is fitted over the first few pulse lengths, so beyond about 9 ms it is an
 extrapolation; the factor shows how much the long-emission region depends on it.
 

@@ -177,8 +177,10 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
 
     The rectangle is the source polygon chopcal transmits and the extent of the gridded
     source; the bin sizes set the grid. The source is the rate into the guide's entrance,
-    n/s, from `ess_butterfly` at `power` (MW), with the proton pulse lasting
-    `pulse_duration` (s) and the moderator's decay times multiplied by `decay_scale`. `pulse_delay` moves every disc together; see
+    n/s, from `ess_butterfly`, with the proton pulse lasting `pulse_duration` (s) and the
+    moderator's decay times multiplied by `decay_scale`. `power` (MW) is the beam's at the
+    design pulse length: the proton current stays the same, so a shorter pulse delivers
+    proportionally fewer protons, and neutrons, per pulse. `pulse_delay` moves every disc together; see
     `trains`. Everything reaching the sample is for a perfect guide; `at_sample_guide` and
     `transmitted_guide` weight the source by `guide_transmission` as well. Times in s,
     wavelengths in Å.
@@ -189,7 +191,8 @@ def transmission(energy_min=4.5, shaping_time=2e-4, wavelength_range=(1.0, 6.0),
     low, high = sorted(wavelength_range)
     wavelength_edges = np.arange(low, high + 0.5 * wavelength_bin, wavelength_bin)
     time_edges = np.arange(0.0, latest_emission + 0.5 * time_bin, time_bin)
-    amounts = BEAMLINE.intensity(wavelength_edges, time_edges, GUIDE_SOLID_ANGLE, power=power,
+    amounts = BEAMLINE.intensity(wavelength_edges, time_edges, GUIDE_SOLID_ANGLE,
+                                 power=power * pulse_duration / ess_butterfly.PULSE_DURATION,
                                  duration=pulse_duration, decay_scale=decay_scale)
     # ponytail: at bin centres, fine while the table is smooth on the bin size
     guide = guide_transmission(0.5 * (wavelength_edges[1:] + wavelength_edges[:-1]))
@@ -557,13 +560,12 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
                                     description='shaping time [ms]'),
         'latest_emission': FloatSlider(value=6.0, min=0.5, max=20.0, step=0.1,
                                        description='last emission [ms]'),
-        # the source: a shorter pulse keeps the neutrons per pulse, as McStas has it;
-        # at the same proton current its power is lower too, by as much
+        # the source: the proton current stays the same, so a shorter pulse is less power
         'pulse_duration': FloatSlider(value=ess_butterfly.PULSE_DURATION * 1e3, min=0.1,
                                       max=3.0, step=0.01, readout_format='.3f',
                                       description='proton pulse [ms]'),
         'power': FloatSlider(value=ess_butterfly.REFERENCE_POWER, min=0.1, max=5.0,
-                             step=0.1, description='beam power [MW]'),
+                             step=0.1, description='power at full pulse [MW]'),
         'decay_scale': FloatSlider(value=1.0, min=0.25, max=4.0, step=0.05,
                                    description='decay time ×'),
         'wavelength_range': FloatRangeSlider(value=(1.0, 6.0), min=0.2, max=19.9, step=0.1,
@@ -619,6 +621,7 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
         fig, axes = make_axes()
     status = Label()
     psc = Label()   # what chopcal picked: the fastest harmonic the burst allows
+    power = Label()   # what the beam delivers with this pulse
 
     def update(*_):
         if state['syncing']:
@@ -642,6 +645,8 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
         slower = (' -- slower than the limit, for a burst this long'
                   if result.psc_speed < v['psc_speed_max'] else '')
         psc.value = f'PSC turns at {result.psc_speed:g} Hz{slower}'
+        delivered = v['power'] * v['pulse_duration'] * 1e-3 / ess_butterfly.PULSE_DURATION
+        power.value = f'beam power {delivered:.2f} MW with this pulse'
 
     for name in chopcal_inputs:   # before `update`, so the delays are chopcal's first
         controls[name].observe(follow_chopcal, names='value')
@@ -651,6 +656,7 @@ def _bifrost_transmitted_phasespace_figure(ei_min=4.5, t_psc=0.2):
     update()
     widgets = list(controls.values())
     widgets.insert(widgets.index(controls['psc_speed_max']) + 1, psc)
+    widgets.insert(widgets.index(controls['power']) + 1, power)
     rows = [HBox([delays[n], frozen[n], suggested[n]]) for n in NAMES]
     return HBox([fig.canvas, VBox([*widgets, status, HTML('<b>chopper delays</b>'), *rows])])
 
@@ -701,10 +707,13 @@ if __name__ == '__main__':
                                pulse_shaping_speed_max=PSC_SPEED_MAX)
     moved = transmission(delays={n: settings[n].delay + 1e-4 for n in NAMES})
     assert np.allclose(moved.outline, transmission(pulse_delay=1e-4).outline)
-    # the source knobs: power scales everything; a shorter pulse with a quicker decay
-    # puts more of the same pulse inside a short window
+    # the source knobs: power scales everything; at the same current, half the pulse is
+    # half the neutrons, once the window holds all of both pulses
     assert np.isclose(transmission(power=2.5).transmitted, 0.5 * result.transmitted)
-    assert (transmission(pulse_duration=1e-3, decay_scale=0.5).emitted > result.emitted)
+    whole = transmission(latest_emission=20e-3).emitted
+    half = transmission(latest_emission=20e-3,
+                        pulse_duration=ess_butterfly.PULSE_DURATION / 2).emitted
+    assert np.isclose(half, 0.5 * whole, rtol=1e-3), half / whole
 
     # the delay sliders follow chopcal until frozen, and keep a hand-set value until one
     # of chopcal's inputs changes
