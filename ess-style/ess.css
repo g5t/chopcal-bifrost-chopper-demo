@@ -133,6 +133,11 @@ section.has-light-background, section.has-light-background h1, section.has-light
   max-height: 95%;
 }
 
+/* a narrowed image keeps its aspect ratio, not its height attribute */
+.reveal img {
+  height: auto;
+}
+
 .reveal strong,
 .reveal b {
   font-weight: bold;
