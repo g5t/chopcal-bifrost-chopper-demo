@@ -86,7 +86,8 @@ jupyter lab bifrost_phasespace.ipynb
 
 ## Files
 
-- `bifrost_phasespace.ipynb`, `trex_phasespace.ipynb`: the notebooks.
+- `bifrost_phasespace.ipynb`, `trex_phasespace.ipynb`, `in5_phasespace.ipynb`: the
+  notebooks.
 - `ess_butterfly.py`: McStas's `ESS_butterfly` moderator for any beamline (3 cm
   moderator), as an absolute rate into (wavelength, emission time) bins. It is
   independent of BIFROST and of the rest, and `python ess_butterfly.py` checks it against
@@ -109,7 +110,10 @@ jupyter lab bifrost_phasespace.ipynb
 - `trex.py`: T-REX (beamline W7), its discs phased as `trex_primary.instr` does.
 - `in5.py`: IN5 at the ILL, from McStas's `ILL_IN5.instr`: its Source_gen as a steady
   source, six discs phased as the instr does, the pairs counter-rotating unless
-  `counter=False` (the instr turns all six the same way), and a perfect guide for now.
+  `counter=False` (the instr turns all six the same way).
+- `in5_guide_transmission.csv`: what of IN5's Source_gen emission reaches a 10 x 25 mm
+  window at the sample, from a McStas scan of the instr without choppers
+  (bifrost-guide-transmission).
 
 `python phasespace.py`, `python bifrost.py`, `python trex.py` and `python in5.py` run the
 self-checks.

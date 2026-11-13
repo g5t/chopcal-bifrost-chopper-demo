@@ -9,20 +9,30 @@ Everything here is McStas's ILL_IN5.instr (mcstas-comps/examples/ILL/ILL_IN5):
   at the end of the shared H16 guide, which the instr does not model. It is steady, so the
   pulses are the choppers': every emission time is alike, and the time axis is time at the
   source, its zero arbitrary.
+- the guide's transmission, from McStas: the instr without its choppers, sample and
+  detectors (bifrost-guide-transmission's make_in5_instrument.py), what reaches a 10 x 25
+  mm window at the sample -- the instr's sample, a cylinder 10 mm across and 25 mm high --
+  over everything Source_gen emits towards its target, so it includes what misses the
+  guide's 30 mm entrance 2.96 m away.
 - the discs, two slits each, at the instr's distances, radii, slit widths and heights, in
   the guide's window at each; 1-2 and 5-6 are pairs 2 cm apart, 3 turns at `ratio` of the
   speed. Each disc's delay is the instr's: the time a neutron of `wavelength` takes from
   the source to it, so that one emitted at zero meets every slit centred.
-- `Chopper0`, the instr's first disc at 0.2 m, is left out: it is not a chopper but the
-  instr's time origin (`isfirst`), there to sample efficiently.
+- `Chopper0`, the instr's first disc, 2.75 m from the source, is left out: it is not a
+  chopper but the instr's time origin (`isfirst`), there to sample efficiently.
 
-Two departures, both deliberate:
+One departure, deliberate:
 
 - `counter`, on by default, turns the second disc of each pair the other way. Every
   reference since IN5's upgrade around 2000 describes counter-rotating pairs; the instr
   turns all six the same way (DiskChopper's direction is the sign of `nu`, and all are
   positive). `counter=False` is the instr.
-- the guide is perfect: IN5's own guide sections are not yet in (no `guide_table`).
+
+Against McStas, at 4.45-4.55 Å, 8500 rpm, ratio 1/2, co-rotating, to a 10 x 25 mm window
+at the sample: each disc alone agrees within 2 %, and all six give 6.91e6 n/s against
+6.61e6 ± 1.9 %. That McStas has `Chopper0` open and `n_pulse=2`. The instr as it is gives
+twice as much: `isfirst` puts every neutron in one of Chopper0's frames, so the frame
+disc 3 closes at ratio 1/2 is never simulated, yet its weight counts the whole time.
 
 The instr's `Ch_mean_R` is commented as rotation axis to guide axis, but DiskChopper takes
 `radius` as the disc's and centres the beam at `radius - yheight/2`; this follows
@@ -31,11 +41,14 @@ DiskChopper, as McStas runs it.
 from __future__ import annotations
 
 from math import ceil
+from pathlib import Path
 
 import numpy as np
 from chopcal import constants as c
 
 from phasespace import Continuous, Instrument
+
+HERE = Path(__file__).parent
 
 #: Source_gen's Maxwellians: temperatures (K) and intensities, n/s per cm² per sr per Å
 TEMPERATURES = (216.8, 33.9, 16.7)
@@ -60,7 +73,7 @@ def spectrum(wavelength):
 
 def _paths():
     """Each disc's distance from the source, m, as the instr's INITIALIZE adds them up:
-    its Ch_Ltot, from Chopper0, plus Chopper0's 0.2 m."""
+    its Ch_Ltot, from Chopper0, which is 0.2 m past SourceTarget, 2.55 m on."""
     gap, disc = 0.2130, 0.02                    # L_gap, disk_gap
     guide1, guide21, guide22, guide23 = 4.39, 0.695, 0.13, 0.695
     guide3, guide41, guide42, guide43, guide44 = 5.5125, 0.7425, 0.035, 0.75, 0.035
@@ -68,7 +81,7 @@ def _paths():
     for step in (disc + guide22, disc + guide23 + guide3 + guide41 + 2 * 0.0003,
                  disc + guide42, disc + guide43, disc + guide44):
         at.append(at[-1] + step)
-    return [0.2 + a for a in at]
+    return [2.75 + a for a in at]
 
 
 NAMES = ('ch1', 'ch2', 'ch3', 'ch4', 'ch5', 'ch6')
@@ -113,7 +126,8 @@ class In5(Instrument):
     names = NAMES
     groups = (0, 0, 1, 2, 3, 3)   # the two pairs share housings
     delay_ranges_ms = {n: (0.0, ceil(PATH[n] * 12 / c.H_OVER_M * 1e3)) for n in NAMES}
-    guide_table = None
+    #: from McStas: what reaches the sample over what Source_gen emits
+    guide_table = HERE / 'in5_guide_transmission.csv'
     wavelength_range = (2.0, 9.0)
     latest_emission = 2 * period()
     wavelength_bin = 0.01
@@ -181,7 +195,7 @@ if __name__ == '__main__':
 
     # the instr's numbers: discs 1 and 6 where INITIALIZE puts them, Source_gen's
     # Maxwellians normalised
-    assert np.isclose(PATH['ch1'], 0.2 + 5.3083) and np.isclose(PATH['ch6'], 0.2 + 13.3089)
+    assert np.isclose(PATH['ch1'], 2.75 + 5.3083) and np.isclose(PATH['ch6'], 2.75 + 13.3089)
     w = np.linspace(0.05, 200.0, 400001)
     for t in TEMPERATURES:
         assert abs(np.trapezoid(maxwellian(w, t), w) - 1) < 1e-3, t
