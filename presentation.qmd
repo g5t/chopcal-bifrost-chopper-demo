@@ -25,8 +25,14 @@ format:
       data-background-position: "top 15px right 15px, center"
       data-background-size: "auto 25%, 100% 100%"
     footer: "
+    <i class='fa fa-calendar' aria-hidden='true'></i>
+    2026-11-16
+    |
+    <i class='fa fa-map-marker' aria-hidden='true'></i>
+    ESS, Lund, Sweden
+    |
     <i class='fa fa-users'></i>
-    DMSC, ESS
+    Spectroscopy Division Meeting
     |
     <i class='fa fa-person-chalkboard'></i>
     Choppers, interactively
