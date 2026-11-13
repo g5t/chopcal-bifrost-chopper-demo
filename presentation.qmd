@@ -62,24 +62,22 @@ execute:
   package: `pip install chopcal`
 - Each disc is described the way NeXus `NXdisk_chopper` and McStas describe it, so its
   numbers go in unconverted
-- It answers *what does this train pass?* exactly: as convex polygons, not a grid and
-  not rays
-- On top of that: BIFROST's settings from a wavelength or energy, NICOS's experiment
-  delays, and guide transport without rays
+- It answers *what does this train pass?* exactly
+  - as convex polygons, not a grid and not rays
 :::
 ::: {.column width="50%"}
 <br>
 
 ```python
-from chopcal.lib import Chopper, Region
 from chopcal.lib import (
-    wavelength_to_inverse_velocity as u)
-
-discs = [Chopper.centred(speed=14, delay=4.3e-3,
-                         width=25, path=6),
-         Chopper.centred(speed=14, delay=2.3e-2,
-                         width=60, path=30)]
-source = Region.rectangle(u(1), u(6) - u(1), 0, 6e-3)
+    Chopper as C, Region as R,
+    wavelength_to_inverse_velocity as u
+)
+discs = [
+  C.centred(speed=14, delay=4.3e-3, width=25, path=6),
+  C.centred(speed=14, delay=2.3e-2, width=60, path=30)
+]
+source = R.rectangle(u(1), u(6) - u(1), 0, 6e-3)
 passed = source.transmit(discs)
 passed.wavelength_ranges()   # [(1.69, 3.82)] Å
 ```
