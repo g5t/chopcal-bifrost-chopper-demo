@@ -88,6 +88,8 @@ jupyter lab bifrost_phasespace.ipynb
 
 - `bifrost_phasespace.ipynb`, `trex_phasespace.ipynb`, `in5_phasespace.ipynb`: the
   notebooks.
+- `app.ipynb`, `presentation.qmd`: the instruments behind one drop-down, for Voila, and a
+  Quarto slide deck embedding it (see Presenting).
 - `ess_butterfly.py`: McStas's `ESS_butterfly` moderator for any beamline (3 cm
   moderator), as an absolute rate into (wavelength, emission time) bins. It is
   independent of BIFROST and of the rest, and `python ess_butterfly.py` checks it against
@@ -117,6 +119,26 @@ jupyter lab bifrost_phasespace.ipynb
 
 `python phasespace.py`, `python bifrost.py`, `python trex.py` and `python in5.py` run the
 self-checks.
+
+## Presenting
+
+`app.ipynb` puts every instrument behind one drop-down, BIFROST first, each figure built
+the first time it is picked and kept after, sized with its controls for a 1920 x 1080
+slide. `presentation.qmd` is a Quarto reveal.js skeleton: one slide embeds the live app,
+and static slides after it, computed when the deck is rendered, stand in if it is not
+running.
+
+```sh
+uv sync --extra app
+uv run voila app.ipynb --no-browser --port=8866 \
+    --Voila.tornado_settings="{'headers': {'Content-Security-Policy': 'frame-ancestors *'}}"
+QUARTO_PYTHON=$PWD/.venv/bin/python quarto preview presentation.qmd   # in another shell
+```
+
+The live slide only shows the app if both are served over HTTP: Voila's default policy
+lets no other page embed it, and `frame-ancestors *` does not cover a deck opened as a
+file. `quarto preview`, or any local web server for the rendered `presentation.html`,
+does it.
 
 ## Without Jupyter
 

@@ -1,0 +1,77 @@
+---
+title: "Choppers, interactively"
+subtitle: "Exact acceptance diagrams with chopcal: BIFROST, T-REX and IN5"
+author: "Gregory Tucker"
+format:
+  revealjs:
+    width: 1920
+    height: 1080
+    slide-number: true
+    embed-resources: false
+jupyter: python3
+execute:
+  echo: false
+  warning: false
+---
+
+## What one picture shows
+
+- The source plane, wavelength against emission time, with the region the chopper train
+  transmits outlined. chopcal computes that region exactly, as convex polygons.
+- What reaches the sample, by arrival time and by wavelength, through the guide.
+- A time–distance diagram showing where each disc stops the beam.
+
+::: {.notes}
+Keep the live app running before the talk:
+`voila app.ipynb --no-browser --port=8866 --Voila.tornado_settings="{'headers': {'Content-Security-Policy': 'frame-ancestors *'}}"`
+:::
+
+## {#live background-iframe="http://localhost:8866" background-interactive="true"}
+
+::: {.notes}
+The live app: pick an instrument from the drop-down. If it is blank, the app is not
+running, so carry on with the static slides that follow.
+:::
+
+## BIFROST, ESS
+
+```{python}
+from phasespace import draw, make_axes, transmission
+from bifrost import BIFROST
+
+fig, axes = make_axes(figsize=(19, 9.6))
+draw(transmission(BIFROST, dict(energy_min=4.5, shaping_time=2e-4)), axes, guide=True)
+```
+
+## T-REX, ESS
+
+```{python}
+from trex import TREX
+
+fig, axes = make_axes(figsize=(19, 9.6))
+draw(transmission(TREX, dict(wavelength=2.4, rrm=4, mode='HF')), axes, log=True, guide=True)
+```
+
+## IN5, ILL: a steady source
+
+```{python}
+from in5 import IN5
+
+fig, axes = make_axes(figsize=(19, 9.6))
+draw(transmission(IN5, dict(wavelength=4.5)), axes, guide=True)
+```
+
+## How far to trust it
+
+- The transmitted regions are exact. Weighting by edges still sweeping the beam
+  matches McStas within counting error for BIFROST's train.
+- Guide transmission comes from McStas scans of each instrument with its choppers
+  removed.
+- IN5 against McStas: each disc alone within 2 %, the whole train within 4 %. The
+  comparison also found ILL_IN5.instr overstating the flux 2× at ratio 1/2.
+
+## Next
+
+- Detectors and energy transfer, which need Bragg scattering for BIFROST's analysers.
+- Hybrid spectrometers, which need Fermi choppers in chopcal.
+- Analytic guide transport in place of the McStas tables.

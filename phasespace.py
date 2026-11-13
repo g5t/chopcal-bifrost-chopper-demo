@@ -890,7 +890,7 @@ def ensure_widget_backend(quiet: bool = False) -> bool:
     return True
 
 
-def _figure(instrument: Instrument, **initial):
+def _figure(instrument: Instrument, figsize=(12, 10), **initial):
     from ipywidgets import (Checkbox, FloatLogSlider, FloatRangeSlider, FloatSlider, HBox,
                             HTML, Label, Layout, ToggleButton, VBox)
     import matplotlib.pyplot as plt
@@ -957,7 +957,8 @@ def _figure(instrument: Instrument, **initial):
             state['syncing'] = False
 
     with plt.ioff():
-        fig, axes = make_axes()
+        fig, axes = make_axes(figsize)
+    fig.canvas.header_visible = False   # ipympl's "Figure 1": noise on a slide
     status = Label()
     note = Label()      # the instrument's: what its settings come to
     power = Label()     # the source's: e.g. what the beam delivers with this pulse
@@ -1003,12 +1004,13 @@ def _figure(instrument: Instrument, **initial):
     return HBox([fig.canvas, VBox([*widgets, status, HTML('<b>choppers</b>'), *rows])])
 
 
-def figure(instrument: Instrument, **initial):
+def figure(instrument: Instrument, figsize=(12, 10), **initial):
     """The interactive figure for an instrument: the source and the transmitted region on
     the left, what reaches the sample by arrival time and by wavelength on the right, and
-    a time-distance diagram below. `initial` sets the instrument's own controls."""
+    a time-distance diagram below. `initial` sets the instrument's own controls;
+    `figsize` (inches) the figure's, smaller to fit a slide."""
     if ensure_widget_backend():
-        return _figure(instrument, **initial)
+        return _figure(instrument, figsize, **initial)
     raise RuntimeError('Interactive mode needed -- please install IPython and ipympl')
 
 
