@@ -93,7 +93,10 @@ jupyter lab bifrost_phasespace.ipynb
   McStas's own intensities into BIFROST's guide.
 - `phasespace.py`: the calculation and the plotting for any instrument, in layers usable
   on their own:
-  - `Instrument`, what an instrument must say: its beamline, guide entrance, sample
+  - `Source`, where the neutrons come from, with its own controls: `ESS(beamline)`,
+    the pulsed ESS source, or `Continuous(spectrum)`, a steady one such as a reactor's,
+    where the choppers make the pulses and the time axis is time at the source;
+  - `Instrument`, what an instrument must say: its source, guide entrance, sample
     distance, discs and how its settings set them, and its controls;
   - `transmission(instrument, settings, ...)` computes one setting and returns plain
     arrays, no plotting;
@@ -104,8 +107,12 @@ jupyter lab bifrost_phasespace.ipynb
 - `bifrost.py`: BIFROST (beamline W4), its discs set by `chopcal.bifrost`.
 - `bifrost_guide_transmission.csv`: BIFROST's guide transmission against wavelength.
 - `trex.py`: T-REX (beamline W7), its discs phased as `trex_primary.instr` does.
+- `in5.py`: IN5 at the ILL, from McStas's `ILL_IN5.instr`: its Source_gen as a steady
+  source, six discs phased as the instr does, the pairs counter-rotating unless
+  `counter=False` (the instr turns all six the same way), and a perfect guide for now.
 
-`python phasespace.py`, `python bifrost.py` and `python trex.py` run the self-checks.
+`python phasespace.py`, `python bifrost.py`, `python trex.py` and `python in5.py` run the
+self-checks.
 
 ## Without Jupyter
 
