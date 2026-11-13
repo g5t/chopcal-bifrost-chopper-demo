@@ -1,15 +1,16 @@
-"""An ESS instrument's source through its chopper train, from chopcal's exact regions.
+"""An instrument's source through its chopper train, from chopcal's exact regions.
 
-The source is McStas's ESS_butterfly for the instrument's beamline, from `ess_butterfly`:
-an absolute rate, n/s, into the guide's entrance, binned on a fine grid of (wavelength,
-emission time). chopcal builds the region of that plane the choppers transmit -- exactly,
+The source is a `Source`: an absolute rate, n/s, into the guide's entrance, binned on a
+fine grid of (wavelength, emission time). `ESS` is McStas's ESS_butterfly for a beamline,
+from `ess_butterfly`, pulsed at 14 Hz; `Continuous` is a steady source -- a reactor's, say
+-- the same at every emission time, where the choppers make the pulses. chopcal builds the region of that plane the choppers transmit -- exactly,
 as convex polygons -- and weights it by how likely each neutron is to get through a disc
 whose edge is still sweeping the beam. Integrating the gridded source over that weighted
 region gives what reaches the sample, by arrival time and by wavelength, and the mean and
 spread of wavelength in each arrival-time bin.
 
-What is particular to an instrument -- its beamline, its discs and how they are set, its
-guide -- is an `Instrument`; `bifrost` and `trex` define two. Three layers, so the same
+What is particular to an instrument -- its source, its discs and how they are set, its
+guide -- is an `Instrument`; `bifrost`, `trex` and `in5` define three. Three layers, so the same
 numbers serve a notebook and a static picture:
 
 - `transmission` computes everything for one instrument and setting, with no plotting;
@@ -35,6 +36,104 @@ import ess_butterfly
 SPURIOUS = 'C4'
 
 
+class Source:
+    """Where an instrument's neutrons come from: what `transmission` grids, and the
+    controls `figure` gives it. Its settings are keyword arguments to `intensity` and
+    `intended`, which `controls` makes and `settings` reads."""
+    #: the source plane's time axis
+    time_label = 'emission time at the source'
+
+    def intensity(self, wavelength_edges, time_edges, solid_angle, **settings):
+        """The time-averaged rate into each (emission time, wavelength) bin, n/s, through
+        `solid_angle` (sr); shaped (time, wavelength)."""
+        raise NotImplementedError
+
+    def intended(self, polygons, **settings) -> bool:
+        """Whether a transmitted region, as convex polygons of (inverse velocity, time),
+        is one the train is designed to pass; the rest are drawn as spurious."""
+        return True
+
+    def controls(self) -> dict:
+        """ipywidgets for the settings, by name."""
+        return {}
+
+    def settings(self, values: dict) -> dict:
+        """`intensity`'s keyword arguments from the controls' values."""
+        return values
+
+    def note(self, values: dict) -> str:
+        """A line shown under the source's controls."""
+        return ''
+
+
+class ESS(Source):
+    """McStas's ESS_butterfly for one beamline, pulsed at 14 Hz. The settings are the
+    proton pulse's duration (s), the beam power at the design pulse length (MW) -- the
+    proton current stays the same, so a shorter pulse delivers proportionally fewer
+    protons, and neutrons, per pulse -- and a factor on the moderator's decay times. What
+    is emitted during the proton pulse is intended; what only after it, spurious."""
+
+    def __init__(self, beamline: ess_butterfly.Beamline):
+        self.beamline = beamline
+
+    def intensity(self, wavelength_edges, time_edges, solid_angle,
+                  power=ess_butterfly.REFERENCE_POWER,
+                  pulse_duration=ess_butterfly.PULSE_DURATION, decay_scale=1.0):
+        return self.beamline.intensity(
+            wavelength_edges, time_edges, solid_angle,
+            power=power * pulse_duration / ess_butterfly.PULSE_DURATION,
+            duration=pulse_duration, decay_scale=decay_scale)
+
+    def intended(self, polygons, pulse_duration=ess_butterfly.PULSE_DURATION, **_):
+        return min(t for p in polygons for _, t in p) < pulse_duration
+
+    def controls(self):
+        from ipywidgets import FloatSlider
+        return {
+            'pulse_duration': FloatSlider(value=ess_butterfly.PULSE_DURATION * 1e3, min=0.1,
+                                          max=3.0, step=0.01, readout_format='.3f',
+                                          description='proton pulse [ms]'),
+            'power': FloatSlider(value=ess_butterfly.REFERENCE_POWER, min=0.1, max=5.0,
+                                 step=0.1, description='power at full pulse [MW]'),
+            'decay_scale': FloatSlider(value=1.0, min=0.25, max=4.0, step=0.05,
+                                       description='decay time ×'),
+        }
+
+    def settings(self, values):
+        return {**values, 'pulse_duration': values['pulse_duration'] * 1e-3}
+
+    def note(self, values):
+        delivered = (values['power'] * values['pulse_duration'] * 1e-3
+                     / ess_butterfly.PULSE_DURATION)
+        return f'beam power {delivered:.2f} MW with this pulse'
+
+
+class Continuous(Source):
+    """A steady source: `spectrum(wavelength)` n/s per Å per sr, the same at every
+    emission time. The time window is a stretch of a steady beam, so each bin holds the
+    rate times its share of the window: what passes the train is the time-averaged rate
+    exactly when the window spans whole periods of the train. Every region is intended;
+    an instrument can say otherwise (`Instrument.intended`)."""
+    time_label = 'time at the source'
+
+    def __init__(self, spectrum, points=4):
+        self.spectrum, self.points = spectrum, points
+
+    def intensity(self, wavelength_edges, time_edges, solid_angle, scale=1.0):
+        w = np.asarray(wavelength_edges, dtype=float)
+        t = np.asarray(time_edges, dtype=float)
+        nodes, weights = np.polynomial.legendre.leggauss(self.points)
+        half = 0.5 * np.diff(w)
+        at = (0.5 * (w[1:] + w[:-1]))[:, None] + half[:, None] * nodes
+        per_bin = (self.spectrum(at) * weights).sum(axis=1) * half * solid_angle * scale
+        return np.outer(np.diff(t) / (t[-1] - t[0]), per_bin)
+
+    def controls(self):
+        from ipywidgets import FloatLogSlider
+        return {'scale': FloatLogSlider(value=1.0, min=-2, max=1, step=0.05,
+                                        readout_format='.3g', description='flux ×')}
+
+
 class Instrument:
     """What `transmission` and `figure` need to know of an instrument.
 
@@ -43,9 +142,9 @@ class Instrument:
     through `settings`.
     """
     name: str
-    beamline: ess_butterfly.Beamline
-    solid_angle: float                  # sr, the guide's entrance seen from the moderator
-    sample: float                       # m from the moderator
+    source: Source
+    solid_angle: float                  # sr, the guide's entrance seen from the source
+    sample: float                       # m from the source
     names: tuple                        # one per disc, upstream first
     groups: tuple                       # discs sharing a housing share a number
     delay_ranges_ms: dict               # slider ranges, by disc name
@@ -90,6 +189,11 @@ class Instrument:
         """The guide's table for these settings."""
         return self.guide_table
 
+    def intended(self, polygons, settings: dict, source: dict) -> bool:
+        """Whether a transmitted region -- convex polygons of (inverse velocity, time) --
+        is one the train is designed for: the source's say, unless the instrument's."""
+        return self.source.intended(polygons, **source)
+
     def guide_transmission(self, wavelength, /, **settings):
         """The fraction of what enters the guide that reaches the sample; interpolated
         in the settings' table, and held at its end values beyond it."""
@@ -131,7 +235,7 @@ def trains(instrument: Instrument, settings: dict, pulse_delay: float = 0.0,
 class Transmission:
     """Everything one setting produces, in plain arrays."""
     wavelength_edges: np.ndarray        # Å
-    time_edges: np.ndarray              # s, emission at the moderator
+    time_edges: np.ndarray              # s, emission at the source
     source: np.ndarray                  # (time, wavelength) n/s per bin into the guide
     outline: list                       # transmitted polygons as [(t, λ), ...]
     arrival_edges: np.ndarray           # s, at the sample
@@ -147,10 +251,10 @@ class Transmission:
     transmitted: float                  # weighted total
     emitted: float                      # total in the source rectangle
     speeds: list                        # Hz, each disc's, signed; 0 when parked
-    #: (name, distance from the moderator in m) for each chopper, then the sample
+    #: (name, distance from the source in m) for each chopper, then the sample
     positions: list
     #: for each entry of `positions`, the (time, distance) outlines of the neutrons that
-    #: got through every chopper before it, swept from the moderator up to it
+    #: got through every chopper before it, swept from the source up to it
     stages: list
     #: for each chopper, the (start, end) times in s that any of the beam can pass it,
     #: from 0 to past the latest time in `stages`
@@ -159,8 +263,8 @@ class Transmission:
     guide: np.ndarray
     at_sample_guide: np.ndarray         # `at_sample` through the real guide
     transmitted_guide: float            # `transmitted` through the real guide
-    #: for each polygon of `outline`, whether it is part of an intended region -- one
-    #: emitted during the proton pulse -- or of a spurious one, emitted only after it
+    #: for each polygon of `outline`, whether it is part of an intended region -- for
+    #: ESS one emitted during the proton pulse -- or of a spurious one
     main: list
     #: the parts of `at_sample`, `by_wavelength`, `transmitted` and their guided
     #: versions that come through the spurious regions
@@ -170,6 +274,7 @@ class Transmission:
     at_sample_guide_spurious: np.ndarray
     transmitted_guide_spurious: float
     zoom: tuple | None = None           # the instrument's, for `draw`
+    time_label: str = 'emission time at the source'   # the source's
 
 
 def open_windows(chopper, until: float):
@@ -245,9 +350,7 @@ def regions(polygons, scale):
 def transmission(instrument: Instrument, settings: dict | None = None,
                  wavelength_range=None, latest_emission=None, wavelength_bin=None,
                  time_bin=None, arrival_bin=None, pulse_delay=0.0, delays=None,
-                 power=ess_butterfly.REFERENCE_POWER,
-                 pulse_duration=ess_butterfly.PULSE_DURATION,
-                 decay_scale=1.0, parked=()) -> Transmission:
+                 parked=(), **source) -> Transmission:
     """The source in a (wavelength, emission time) rectangle, through an instrument's train.
 
     `settings` are the keyword arguments of the instrument's `choppers`; its defaults
@@ -255,10 +358,8 @@ def transmission(instrument: Instrument, settings: dict | None = None,
 
     The rectangle is the source polygon chopcal transmits and the extent of the gridded
     source; the bin sizes set the grid. The source is the rate into the guide's entrance,
-    n/s, from `ess_butterfly`, with the proton pulse lasting `pulse_duration` (s) and the
-    moderator's decay times multiplied by `decay_scale`. `power` (MW) is the beam's at the
-    design pulse length: the proton current stays the same, so a shorter pulse delivers
-    proportionally fewer protons, and neutrons, per pulse. `pulse_delay` moves every disc together; see
+    n/s, from the instrument's `Source`, with `source` its settings -- for `ESS`, `power`,
+    `pulse_duration` and `decay_scale`. `pulse_delay` moves every disc together; see
     `trains`. Everything reaching the sample is for a perfect guide; `at_sample_guide` and
     `transmitted_guide` weight the source by the instrument's guide as well. The discs
     named in `parked` are stopped open: they pass everything, as if they were not there.
@@ -274,10 +375,8 @@ def transmission(instrument: Instrument, settings: dict | None = None,
     arrival_bin = arrival_bin or instrument.arrival_bin
     wavelength_edges = np.arange(low, high + 0.5 * wavelength_bin, wavelength_bin)
     time_edges = np.arange(0.0, latest_emission + 0.5 * time_bin, time_bin)
-    amounts = instrument.beamline.intensity(wavelength_edges, time_edges,
-                                            instrument.solid_angle,
-                                 power=power * pulse_duration / ess_butterfly.PULSE_DURATION,
-                                 duration=pulse_duration, decay_scale=decay_scale)
+    amounts = instrument.source.intensity(wavelength_edges, time_edges,
+                                          instrument.solid_angle, **source)
     # ponytail: at bin centres, fine while the table is smooth on the bin size
     guide = instrument.guide_transmission(0.5 * (wavelength_edges[1:]
                                                  + wavelength_edges[:-1]),
@@ -302,7 +401,7 @@ def transmission(instrument: Instrument, settings: dict | None = None,
         margin = 0.02 * (last - first)
         first, last = first - margin, last + margin
     else:
-        first, last = 0.0, 1 / 14
+        first, last = time_edges[0], time_edges[-1]
     arrival_edges = first + arrival_bin * np.arange(ceil((last - first) / arrival_bin) + 1)
 
     def moments(region):
@@ -324,18 +423,19 @@ def transmission(instrument: Instrument, settings: dict | None = None,
         stages.append([swept(p.vertices, 0.0, stop) for p in through.polygons])
     positions = stops
     until = 1.1 * max((t for polygons in stages for q in polygons for t, _ in q),
-                      default=1 / 14)
+                      default=time_edges[-1])
     openings = [[(0.0, until)] if n in parked else open_windows(chopper, until)
                 for n, chopper in zip(names, support_train)]
     at_sample, at_sample_support = moments(weighted), moments(support)
 
-    # the intended regions, emitted during the proton pulse, and the spurious ones, only
-    # after it: every cell the train opens goes to the region nearest it -- inside one,
-    # its own boundary is nearer than any other's
+    # the intended regions and the spurious ones, as the instrument or its source says:
+    # every cell the train opens goes to the region nearest it -- inside one, its own
+    # boundary is nearer than any other's
     # ponytail: a cell straddling two regions goes whole to one; they are far apart
     vertices = [p.vertices for p in support.polygons]
     groups = regions(vertices, (np.diff(inverse_velocities[:2])[0], time_bin))
-    intended = [min(t for i in g for _, t in vertices[i]) < pulse_duration for g in groups]
+    intended = [instrument.intended([vertices[i] for i in g], settings or {}, source)
+                for g in groups]
     spurious_cells = np.zeros(amounts.shape, dtype=bool)
     main = [intended[k] for i in range(len(vertices))
             for k, g in enumerate(groups) if i in g]
@@ -377,7 +477,8 @@ def transmission(instrument: Instrument, settings: dict | None = None,
             arrival_edges).sum(axis=1),
         transmitted_guide_spurious=weighted.integrate(guided_spurious, inverse_velocities,
                                                       time_edges),
-        zoom=instrument.zoom(**(settings or {})))
+        zoom=instrument.zoom(**(settings or {})),
+        time_label=instrument.source.time_label)
 
 
 def _cells(indices, like):
@@ -479,7 +580,7 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
                                linewidth=0.9))
     left.set_xlim(t[0] * 1e3, t[-1] * 1e3)
     left.set_ylim(w[0], w[-1])
-    left.set_xlabel('emission time at the source [ms]')
+    left.set_xlabel(f'{result.time_label} [ms]')
     left.set_ylabel('wavelength [Å]')
     energy = left.secondary_yaxis('right', functions=(_energy, _wavelength))
     _energy_axis(energy.yaxis, (w[0], w[-1]))
@@ -640,7 +741,7 @@ def draw_time_distance(result: Transmission, ax, window: tuple | None = None):
         start, end = span
     else:
         times = [t for polygons in result.stages for p in polygons
-                 for t in _times_between(p, low, top)] or [0.0, 1 / 14]
+                 for t in _times_between(p, low, top)] or [0.0, result.time_edges[-1]]
         margin = 0.03 * (max(times) - min(times))
         start = 0.0 if low == 0 else max(min(times) - margin, 0.0)
         end = max(times) + margin
@@ -673,7 +774,7 @@ def draw_time_distance(result: Transmission, ax, window: tuple | None = None):
     ax.set_xlim(start * 1e3, end * 1e3)
     ax.set_ylim(low, top + 0.03 * (top - low))
     ax.set_xlabel('time [ms]')
-    ax.set_ylabel('distance from the moderator [m]')
+    ax.set_ylabel('distance from the source [m]')
     if window:
         inside = [n for n, at in result.positions[:-1] if low <= at <= top]
         ax.set_title('... and near the source' if low == 0
@@ -731,6 +832,7 @@ def _figure(instrument: Instrument, **initial):
     style = {'description_width': '9em'}
     wide = Layout(width='26em')
     own = instrument.controls(**initial)   # what the delays follow
+    source = instrument.source.controls()
     controls = {
         **own,
         'latest_emission': FloatSlider(value=instrument.latest_emission * 1e3, min=0.5,
@@ -738,14 +840,7 @@ def _figure(instrument: Instrument, **initial):
         'wavelength_range': FloatRangeSlider(value=instrument.wavelength_range, min=0.2,
                                              max=19.9, step=0.1,
                                              description='wavelengths [Å]'),
-        # the source: the proton current stays the same, so a shorter pulse is less power
-        'pulse_duration': FloatSlider(value=ess_butterfly.PULSE_DURATION * 1e3, min=0.1,
-                                      max=3.0, step=0.01, readout_format='.3f',
-                                      description='proton pulse [ms]'),
-        'power': FloatSlider(value=ess_butterfly.REFERENCE_POWER, min=0.1, max=5.0,
-                             step=0.1, description='power at full pulse [MW]'),
-        'decay_scale': FloatSlider(value=1.0, min=0.25, max=4.0, step=0.05,
-                                   description='decay time ×'),
+        **source,
         # the grids, on log scales: an instrument selecting narrow strips needs fine ones
         'time_bin': FloatLogSlider(value=instrument.time_bin * 1e6, min=0, max=np.log10(200),
                                    step=0.05, readout_format='.3g',
@@ -799,7 +894,7 @@ def _figure(instrument: Instrument, **initial):
         fig, axes = make_axes()
     status = Label()
     note = Label()      # the instrument's: what its settings come to
-    power = Label()     # what the beam delivers with this pulse
+    power = Label()     # the source's: e.g. what the beam delivers with this pulse
 
     def update(*_):
         if state['syncing']:
@@ -816,16 +911,15 @@ def _figure(instrument: Instrument, **initial):
                               arrival_bin=v['arrival_bin'] * 1e-6,
                               pulse_delay=v['pulse_delay'] * 1e-6,
                               delays={n: w.value * 1e-3 for n, w in delays.items()},
-                              power=v['power'], pulse_duration=v['pulse_duration'] * 1e-3,
-                              decay_scale=v['decay_scale'], parked=stopped)
+                              parked=stopped, **instrument.source.settings(
+                                  {k: v[k] for k in source}))
         state['colorbar'] = draw(result, axes, colorbar=state['colorbar'], log=v['log'],
                                  guide=v.get('guide', False))
         fig.canvas.draw_idle()
         status.value = (f'{result.source.shape[1]} x {result.source.shape[0]} bins; '
                         f'{len(result.outline)} transmitted polygon(s)')
         note.value = instrument.note(result, {k: w.value for k, w in own.items()})
-        delivered = v['power'] * v['pulse_duration'] * 1e-3 / ess_butterfly.PULSE_DURATION
-        power.value = f'beam power {delivered:.2f} MW with this pulse'
+        power.value = instrument.source.note({k: v[k] for k in source})
 
     for widget in own.values():   # before `update`, so the delays are the settings' first
         widget.observe(follow, names='value')
@@ -835,7 +929,8 @@ def _figure(instrument: Instrument, **initial):
     update()
     widgets = list(controls.values())
     widgets.insert(len(own), note)
-    widgets.insert(widgets.index(controls['power']) + 1, power)
+    if source:
+        widgets.insert(widgets.index(controls[list(source)[-1]]) + 1, power)
     rows = [HBox([delays[n], parked[n], suggested[n]]) for n in instrument.names]
     return HBox([fig.canvas, VBox([*widgets, status, HTML('<b>choppers</b>'), *rows])])
 

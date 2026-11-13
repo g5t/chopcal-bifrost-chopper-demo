@@ -18,7 +18,7 @@ from pathlib import Path
 from chopcal import constants as c
 
 import ess_butterfly
-from phasespace import Instrument
+from phasespace import ESS, Instrument
 
 HERE = Path(__file__).parent
 #: Into the pulse that the discs are phased for, s: about its centre.
@@ -66,7 +66,7 @@ def repetition(rrm: int) -> float:
 
 class Trex(Instrument):
     name = 'T-REX'
-    beamline = ess_butterfly.Beamline('W', 7)
+    source = ESS(ess_butterfly.Beamline('W', 7))
     #: the first guide's entrance, 89.955 x 29.992 mm at 1.89593 m from the moderator
     solid_angle = 0.089955 * 0.029992 / 1.89593 ** 2
     sample = 163.8

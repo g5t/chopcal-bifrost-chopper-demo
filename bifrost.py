@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 import ess_butterfly
-from phasespace import Instrument
+from phasespace import ESS, Instrument
 
 #: The fastest the designed pulse-shaping disks may turn, Hz: the 15th harmonic of 14 Hz.
 #: chopcal's own default is 196 Hz. The 126 Hz substitutes installed now are the 9th.
@@ -19,7 +19,7 @@ PSC_SPEED_MAX = 210.0
 
 class Bifrost(Instrument):
     name = 'BIFROST'
-    beamline = ess_butterfly.Beamline('W', 4)
+    source = ESS(ess_butterfly.Beamline('W', 4))
     #: the guide's entrance, 68.70 x 34.45 mm at 1.9034 m from the moderator (niess)
     solid_angle = 0.068701 * 0.034454 / 1.90343 ** 2
     sample = 162.0
