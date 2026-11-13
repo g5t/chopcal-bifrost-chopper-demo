@@ -14,6 +14,66 @@ execute:
   warning: false
 ---
 
+## chopcal
+
+- Disc-chopper calculations that otherwise live inside McStas instruments, as a Python
+  package: `pip install chopcal`.
+- Each disc is described the way NeXus `NXdisk_chopper` and McStas describe it, so its
+  numbers go in unconverted.
+- It answers *what does this train pass?* exactly: as convex polygons, not a grid and
+  not rays.
+- On top of that: BIFROST's settings from a wavelength or energy, NICOS's experiment
+  delays, and guide transport without rays.
+
+## A disc is six numbers
+
+:::: {.columns}
+::: {.column width="45%"}
+```{python}
+import intro_figures
+intro_figures.disc();
+```
+:::
+::: {.column width="55%"}
+| | |
+|---|---|
+| `speed` | Hz; its sign is the direction of rotation |
+| `delay` | s: when the zero mark is on the beam |
+| `beam` | degrees from the mark to where the beam crosses |
+| `edges` | degrees from the mark, two per opening |
+| `path` | m from the source to the disc |
+| `aperture` | degrees: the beam's width on the disc |
+
+An edge at angle *a* is on the beam at
+
+$$t(a) = \text{delay} + \frac{\text{beam} - a}{360\,\text{speed}}$$
+
+and every 1/|speed| after that.
+:::
+::::
+
+## One plane: emission time and wavelength
+
+```{python}
+intro_figures.plane();
+```
+
+A neutron emitted at time *t* with wavelength *λ* reaches a disc *L* downstream at
+*t* + *L λ m/h*. Each opening is a straight band, and a train passes only where all its
+bands overlap. chopcal works in inverse velocity, where each band's slope is −*L*.
+
+## The beam's width: when, not how fast
+
+```{python}
+intro_figures.ramp();
+```
+
+- A wide beam opens each window half its width early and closes it half late. That
+  changes *when* a neutron passes, never its speed.
+- `Region.transmit` gives where anything passes. `Region.transmit_weighted` gives how
+  likely a neutron is to pass, rising across the aperture. For BIFROST it matches McStas
+  within counting error.
+
 ## What one picture shows
 
 - The source plane, wavelength against emission time, with the region the chopper train
