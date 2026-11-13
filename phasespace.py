@@ -42,6 +42,8 @@ class Source:
     `intended`, which `controls` makes and `settings` reads."""
     #: the source plane's time axis
     time_label = 'emission time at the source'
+    #: the same at every time, so that only the train sets where the window starts
+    steady = False
 
     def intensity(self, wavelength_edges, time_edges, solid_angle, **settings):
         """The time-averaged rate into each (emission time, wavelength) bin, n/s, through
@@ -115,6 +117,7 @@ class Continuous(Source):
     exactly when the window spans whole periods of the train. Every region is intended;
     an instrument can say otherwise (`Instrument.intended`)."""
     time_label = 'time at the source'
+    steady = True
 
     def __init__(self, spectrum, points=4):
         self.spectrum, self.points = spectrum, points
@@ -174,6 +177,11 @@ class Instrument:
     def settings(self, values: dict) -> dict:
         """`choppers`' keyword arguments from the controls' values."""
         return values
+
+    def train_period(self, **settings) -> float | None:
+        """How often the train repeats, s, for a steady source: `transmission` then
+        takes the window in whole periods, starting between two transmitted regions."""
+        return None
 
     def zoom(self, **settings) -> tuple | None:
         """The stretch of the instrument the second time-distance panel shows, (from, to)
@@ -275,6 +283,8 @@ class Transmission:
     transmitted_guide_spurious: float
     zoom: tuple | None = None           # the instrument's, for `draw`
     time_label: str = 'emission time at the source'   # the source's
+    #: s, what `clean_start` moved every disc by, for a steady source
+    source_delay: float = 0.0
 
 
 def open_windows(chopper, until: float):
@@ -360,7 +370,11 @@ def transmission(instrument: Instrument, settings: dict | None = None,
     source; the bin sizes set the grid. The source is the rate into the guide's entrance,
     n/s, from the instrument's `Source`, with `source` its settings -- for `ESS`, `power`,
     `pulse_duration` and `decay_scale`. `pulse_delay` moves every disc together; see
-    `trains`. Everything reaching the sample is for a perfect guide; `at_sample_guide` and
+    `trains`. With a steady source and an instrument that gives its `train_period`, the
+    window is cut to whole periods and every disc is moved together by `source_delay`,
+    as `pulse_delay` moves them, so that the window starts between two transmitted
+    regions (`clean_start`): it then holds only whole ones, and their time-averaged rate.
+    Everything reaching the sample is for a perfect guide; `at_sample_guide` and
     `transmitted_guide` weight the source by the instrument's guide as well. The discs
     named in `parked` are stopped open: they pass everything, as if they were not there.
     Times in s, wavelengths in Å.
@@ -374,7 +388,14 @@ def transmission(instrument: Instrument, settings: dict | None = None,
     time_bin = time_bin or instrument.time_bin
     arrival_bin = arrival_bin or instrument.arrival_bin
     wavelength_edges = np.arange(low, high + 0.5 * wavelength_bin, wavelength_bin)
-    time_edges = np.arange(0.0, latest_emission + 0.5 * time_bin, time_bin)
+    period = (instrument.train_period(**(settings or {}))
+              if instrument.source.steady else None)
+    if period:
+        latest_emission = period * max(1, floor(latest_emission / period + 1e-9))
+        time_edges = np.linspace(0.0, latest_emission,
+                                 max(1, round(latest_emission / time_bin)) + 1)
+    else:
+        time_edges = np.arange(0.0, latest_emission + 0.5 * time_bin, time_bin)
     amounts = instrument.source.intensity(wavelength_edges, time_edges,
                                           instrument.solid_angle, **source)
     # ponytail: at bin centres, fine while the table is smooth on the bin size
@@ -388,7 +409,10 @@ def transmission(instrument: Instrument, settings: dict | None = None,
     rectangle = Region.rectangle(inverse_velocities[0],
                                  inverse_velocities[-1] - inverse_velocities[0],
                                  time_edges[0], time_edges[-1] - time_edges[0])
-    support_train, ramped_train = trains(instrument, settings or {}, pulse_delay, delays)
+    source_delay = (clean_start(instrument, settings or {}, period, inverse_velocities,
+                                time_bin, pulse_delay, delays, parked) if period else 0.0)
+    support_train, ramped_train = trains(instrument, settings or {},
+                                         pulse_delay + source_delay, delays)
     running = [i for i, n in enumerate(names) if n not in parked]
     support = rectangle.transmit([support_train[i] for i in running])
     weighted = rectangle.transmit_weighted([ramped_train[i] for i in running],
@@ -478,7 +502,49 @@ def transmission(instrument: Instrument, settings: dict | None = None,
         transmitted_guide_spurious=weighted.integrate(guided_spurious, inverse_velocities,
                                                       time_edges),
         zoom=instrument.zoom(**(settings or {})),
-        time_label=instrument.source.time_label)
+        time_label=instrument.source.time_label, source_delay=source_delay)
+
+
+def clean_start(instrument: Instrument, settings: dict, period: float, inverse_velocities,
+                time_bin: float, pulse_delay=0.0, delays=None, parked=()) -> float:
+    """What to add to every disc's delay so that a window from 0 in whole periods holds
+    only whole transmitted regions, with a steady source: the train repeats every
+    `period`, and so do its regions, so a cut between two of them at one end is one at
+    the other too.
+
+    Two periods are transmitted, each region taken as the times it spans over the
+    wavelengths, and those folded into one period; the middle of the widest gap between
+    them moves to 0. With no gap -- a region a period long or more, or regions covering
+    every time -- there is no clean start, and nothing moves.
+    """
+    from chopcal.lib import Region
+    support, _ = trains(instrument, settings, pulse_delay, delays)
+    running = [d for n, d in zip(instrument.names, support) if n not in parked]
+    u = inverse_velocities
+    through = Region.rectangle(u[0], u[-1] - u[0], 0.0, 2 * period).transmit(running)
+    vertices = [p.vertices for p in through.polygons]
+    if not vertices:
+        return 0.0
+    spans = []
+    for group in regions(vertices, (u[1] - u[0], time_bin)):
+        times = [t for i in group for _, t in vertices[i]]
+        first, last = min(times), max(times)
+        if last - first >= period:
+            return 0.0
+        spans.append((first % period, first % period + last - first))
+    spans.sort()
+    merged = [list(spans[0])]
+    for a, b in spans[1:]:
+        if a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    gaps = [(b[0] - a[1], a[1]) for a, b in zip(merged, merged[1:])]
+    gaps.append((merged[0][0] + period - merged[-1][1], merged[-1][1]))   # round the end
+    width, start = max(gaps)
+    if width <= 0:
+        return 0.0
+    return -(start + width / 2) % period
 
 
 def _cells(indices, like):
@@ -917,7 +983,9 @@ def _figure(instrument: Instrument, **initial):
                                  guide=v.get('guide', False))
         fig.canvas.draw_idle()
         status.value = (f'{result.source.shape[1]} x {result.source.shape[0]} bins; '
-                        f'{len(result.outline)} transmitted polygon(s)')
+                        f'{len(result.outline)} transmitted polygon(s)'
+                        + (f'; every disc moved {result.source_delay * 1e3:.3f} ms to '
+                           'start between regions' if result.source_delay else ''))
         note.value = instrument.note(result, {k: w.value for k, w in own.items()})
         power.value = instrument.source.note({k: v[k] for k in source})
 

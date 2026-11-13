@@ -162,6 +162,9 @@ class In5(Instrument):
             'counter': Checkbox(value=counter, description='counter-rotating pairs'),
         }
 
+    def train_period(self, wavelength=4.5, speed=8500, ratio=0.5, counter=True):
+        return period(speed, ratio)
+
     def intended(self, polygons, settings, source):
         """The regions holding the chosen wavelength; the rest pass another one."""
         from chopcal.lib import wavelength_to_inverse_velocity
@@ -209,11 +212,25 @@ if __name__ == '__main__':
 
     result = transmission(IN5, dict(wavelength=4.5))
     assert result.transmitted > 0
-    # the chosen neutron gets through once a period, in an intended region; half a
-    # period on, the pairs are open again but disc 3, at half their speed, is not
-    point = (period(), 4.5)
-    assert any(main and inside(p, point) for p, main in zip(result.outline, result.main))
-    assert not any(inside(p, (1.5 * period(), 4.5)) for p in result.outline)
+    # every disc moved together to start the window between regions, so the chosen
+    # neutron gets through once a period from that delay on, in an intended region; half
+    # a period on, the pairs are open again but disc 3, at half their speed, is not
+    t0 = result.source_delay % period()
+    for t in (t0, t0 + period()):
+        assert any(main and inside(p, (t, 4.5))
+                   for p, main in zip(result.outline, result.main)), t
+        assert not any(inside(p, ((t + 0.5 * period()) % (2 * period()), 4.5))
+                       for p in result.outline)
+    # the window holds only whole regions: none reaches either end of it, so one period,
+    # two or three pass the same rate, and a window between whole periods is cut to them
+    end = result.time_edges[-1]
+    assert np.isclose(end, 2 * period())
+    assert all(0 < t < end for p in result.outline for t, _ in p)
+    rates = [transmission(IN5, dict(wavelength=4.5), latest_emission=k * period()).transmitted
+             for k in (1, 2, 3)]
+    assert np.allclose(rates, rates[0], rtol=1e-3), rates
+    assert np.isclose(transmission(IN5, latest_emission=2.5 * period()).time_edges[-1],
+                      2 * period())
     # the delays are the instr's: each disc's flight time at the wavelength
     for (disc, _), n in zip(IN5.choppers(wavelength=4.5), IN5.names):
         assert np.isclose(disc.delay, PATH[n] * 4.5 / c.H_OVER_M)
