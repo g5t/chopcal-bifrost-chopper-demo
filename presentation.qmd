@@ -1,40 +1,94 @@
 ---
-title: "Choppers, interactively"
-subtitle: "Exact acceptance diagrams with chopcal: BIFROST, T-REX and IN5"
-author: "Gregory Tucker"
+title: "
+<h1 align='right' style='font-size:80pt; color:#fff'>Choppers, interactively</h1>
+"
+subtitle: "
+<h2 align='right' style='font-size:50pt; color:#fff'>Exact acceptance diagrams with chopcal<br>
+<span style='font-size:36pt'>BIFROST, T-REX and IN5</span><br><br>
+<b>Greg</b>ory S. Tucker<br>DMSC, ESS</h2>
+"
 format:
   revealjs:
-    width: 1920
-    height: 1080
+    menu: false
+    width: 1900
+    height: 1000
+    navigation-mode: vertical
     slide-number: true
+    preview-links: true
+    controls: false
+    code-line-numbers: false
     embed-resources: false
+    css: ess-style/ess.css
+    title-slide-attributes:
+      data-background-color: "#0099DC"
+      data-background-image: "ess-style/ess.svg, ess-style/bar.svg"
+      data-background-position: "top 15px right 15px, center"
+      data-background-size: "auto 25%, 100% 100%"
+    footer: "
+    <i class='fa fa-users'></i>
+    DMSC, ESS
+    |
+    <i class='fa fa-person-chalkboard'></i>
+    Choppers, interactively
+    "
+    pointer:
+      color: lime
+      key: q
+      pointerSize: 16
+      alwaysVisible: false
+revealjs-plugins:
+  - pointer
 jupyter: python3
 execute:
   echo: false
   warning: false
 ---
 
-## chopcal
+## Overview {.center}
+- What chopcal is, and how it works
+- Three instruments, live: BIFROST, T-REX and IN5
+- How far to trust it, and what comes next
 
+## chopcal
+:::: {.columns}
+::: {.column width="50%"}
 - Disc-chopper calculations that otherwise live inside McStas instruments, as a Python
-  package: `pip install chopcal`.
+  package: `pip install chopcal`
 - Each disc is described the way NeXus `NXdisk_chopper` and McStas describe it, so its
-  numbers go in unconverted.
+  numbers go in unconverted
 - It answers *what does this train pass?* exactly: as convex polygons, not a grid and
-  not rays.
+  not rays
 - On top of that: BIFROST's settings from a wavelength or energy, NICOS's experiment
-  delays, and guide transport without rays.
+  delays, and guide transport without rays
+:::
+::: {.column width="50%"}
+<br>
+
+```python
+from chopcal.lib import Chopper, Region
+from chopcal.lib import (
+    wavelength_to_inverse_velocity as u)
+
+discs = [Chopper.centred(speed=14, delay=4.3e-3,
+                         width=25, path=6),
+         Chopper.centred(speed=14, delay=2.3e-2,
+                         width=60, path=30)]
+source = Region.rectangle(u(1), u(6) - u(1), 0, 6e-3)
+passed = source.transmit(discs)
+passed.wavelength_ranges()   # [(1.69, 3.82)] Å
+```
+:::
+::::
 
 ## A disc is six numbers
-
 :::: {.columns}
-::: {.column width="45%"}
+::: {.column width="40%"}
 ```{python}
 import intro_figures
 intro_figures.disc();
 ```
 :::
-::: {.column width="55%"}
+::: {.column width="60%"}
 | | |
 |---|---|
 | `speed` | Hz; its sign is the direction of rotation |
@@ -45,41 +99,69 @@ intro_figures.disc();
 | `aperture` | degrees: the beam's width on the disc |
 
 An edge at angle *a* is on the beam at
-
 $$t(a) = \text{delay} + \frac{\text{beam} - a}{360\,\text{speed}}$$
-
 and every 1/|speed| after that.
 :::
 ::::
 
 ## One plane: emission time and wavelength
-
+:::: {.columns}
+::: {.column width="64%"}
 ```{python}
-intro_figures.plane();
+import matplotlib.pyplot as plt
+with intro_figures.style():
+    _, axes = plt.subplots(1, 2, figsize=(12, 7.5), layout='constrained')
+    intro_figures.plane(axes);
 ```
+:::
+::: {.column width="36%"}
+<br>
 
-A neutron emitted at time *t* with wavelength *λ* reaches a disc *L* downstream at
-*t* + *L λ m/h*. Each opening is a straight band, and a train passes only where all its
-bands overlap. chopcal works in inverse velocity, where each band's slope is −*L*.
+- A neutron emitted at *t* with wavelength *λ* reaches a disc *L* downstream at
+  *t* + *L λ m/h*
+- Each opening is a straight band
+- A train passes only where all its bands overlap
+- chopcal works in inverse velocity, where each band's slope is −*L*
+:::
+::::
 
 ## The beam's width: when, not how fast
-
+:::: {.columns}
+::: {.column width="55%"}
 ```{python}
-intro_figures.ramp();
+with intro_figures.style():
+    _, ax = plt.subplots(figsize=(10, 6.5), layout='constrained')
+    intro_figures.ramp(ax);
 ```
+:::
+::: {.column width="45%"}
+<br>
 
-- A wide beam opens each window half its width early and closes it half late. That
-  changes *when* a neutron passes, never its speed.
-- `Region.transmit` gives where anything passes. `Region.transmit_weighted` gives how
-  likely a neutron is to pass, rising across the aperture. For BIFROST it matches McStas
-  within counting error.
+- A wide beam opens each window half its width early and closes it half late: it changes
+  *when* a neutron passes, never its speed
+- `Region.transmit` gives where anything passes
+- `Region.transmit_weighted` gives how likely a neutron is to pass, rising across the
+  aperture
+- For BIFROST it matches McStas within counting error
+:::
+::::
 
 ## What one picture shows
-
-- The source plane, wavelength against emission time, with the region the chopper train
-  transmits outlined. chopcal computes that region exactly, as convex polygons.
-- What reaches the sample, by arrival time and by wavelength, through the guide.
-- A time–distance diagram showing where each disc stops the beam.
+:::: {.columns}
+::: {.column width="55%"}
+- The source plane, wavelength against emission time, with the region the chopper
+  train transmits outlined
+- What reaches the sample, by arrival time and by wavelength, through the guide
+- A time–distance diagram showing where each disc stops the beam
+:::
+::: {.column width="45%"}
+- Pick an instrument from the drop-down
+- Its controls are the instrument's own settings: an energy and shaping time for
+  BIFROST, a wavelength and repetition-rate multiplication for T-REX, a wavelength,
+  speed and ratio for IN5
+- Every change recomputes the transmitted region exactly
+:::
+::::
 
 ::: {.notes}
 Keep the live app running before the talk:
@@ -99,7 +181,7 @@ running, so carry on with the static slides that follow.
 from phasespace import draw, make_axes, transmission
 from bifrost import BIFROST
 
-fig, axes = make_axes(figsize=(19, 9.6))
+fig, axes = make_axes(figsize=(19, 8.4))
 draw(transmission(BIFROST, dict(energy_min=4.5, shaping_time=2e-4)), axes, guide=True)
 ```
 
@@ -108,7 +190,7 @@ draw(transmission(BIFROST, dict(energy_min=4.5, shaping_time=2e-4)), axes, guide
 ```{python}
 from trex import TREX
 
-fig, axes = make_axes(figsize=(19, 9.6))
+fig, axes = make_axes(figsize=(19, 8.4))
 draw(transmission(TREX, dict(wavelength=2.4, rrm=4, mode='HF')), axes, log=True, guide=True)
 ```
 
@@ -117,21 +199,46 @@ draw(transmission(TREX, dict(wavelength=2.4, rrm=4, mode='HF')), axes, log=True,
 ```{python}
 from in5 import IN5
 
-fig, axes = make_axes(figsize=(19, 9.6))
+fig, axes = make_axes(figsize=(19, 8.4))
 draw(transmission(IN5, dict(wavelength=4.5)), axes, guide=True)
 ```
 
 ## How far to trust it
-
-- The transmitted regions are exact. Weighting by edges still sweeping the beam
-  matches McStas within counting error for BIFROST's train.
+:::: {.columns}
+::: {.column width="55%"}
+- The transmitted regions are exact
+- Weighting by edges still sweeping the beam matches McStas within counting error for
+  BIFROST's train
 - Guide transmission comes from McStas scans of each instrument with its choppers
-  removed.
-- IN5 against McStas: each disc alone within 2 %, the whole train within 4 %. The
-  comparison also found ILL_IN5.instr overstating the flux 2× at ratio 1/2.
+  removed
+- IN5 against McStas: each disc alone within 2 %, the whole train within 5 %
+:::
+::: {.column width="45%"}
+IN5 at 4.45–4.55 Å, 8500 rpm, ratio 1/2, at the sample:
+
+| | n/s |
+|---|---|
+| ILL_IN5.instr as is | 1.23 × 10⁷ |
+| … every frame simulated | 6.61 × 10⁶ ± 1.9 % |
+| chopcal | 6.91 × 10⁶ |
+
+The instr simulates one frame of Chopper0, so it overstates the flux by 1/ratio.
+:::
+::::
 
 ## Next
+:::: {.columns}
+::: {.column width="55%"}
+- Detectors and energy transfer, which need Bragg scattering for BIFROST's analysers
+- Hybrid spectrometers, which need Fermi choppers in chopcal
+- Analytic guide transport in place of the McStas tables
+:::
+::: {.column width="45%"}
+Try it:
 
-- Detectors and energy transfer, which need Bragg scattering for BIFROST's analysers.
-- Hybrid spectrometers, which need Fermi choppers in chopcal.
-- Analytic guide transport in place of the McStas tables.
+```sh
+uv sync --extra app
+uv run voila app.ipynb
+```
+:::
+::::

@@ -1,0 +1,416 @@
+@import url(https://fonts.googleapis.com/css?family=News+Cycle:400,700);
+@import url(https://fonts.googleapis.com/css?family=Lato:400,700,400italic,700italic);
+@import url(https://fonts.googleapis.com/css?family=Titillium+Web:400,700);
+@import url(https://cdn.jsdelivr.net/npm/segoe-fonts@1.0.1/segoe-fonts.min.css);
+@import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.0/css/all.min.css');
+section.has-light-background, section.has-light-background h1, section.has-light-background h2, section.has-light-background h3, section.has-light-background h4, section.has-light-background h5, section.has-light-background h6 {
+  color: #222;
+}
+
+/*********************************************
+ * GLOBAL STYLES
+ *********************************************/
+:root {
+  --r-background-color: #0099dc;
+  --r-main-font: Segoe UI Light, Lato, sans-serif;
+  --r-main-font-size: 40px;
+  --r-main-color: #0099dc;
+  --r-block-margin: 20px;
+  --r-heading-margin: 0 0 20px 0;
+  --r-heading-font: "Titillium", News Cycle, Impact, sans-serif;
+  --r-heading-color: #0099dc;
+  --r-heading-line-height: 1.2;
+  --r-heading-letter-spacing: normal;
+  --r-heading-text-transform: normal;
+  --r-heading-text-shadow: none;
+  --r-heading-font-weight: normal;
+  --r-heading1-text-shadow: nones;
+  --r-heading1-size: 3.77em;
+  --r-heading2-size: 2.11em;
+  --r-heading3-size: 1.55em;
+  --r-heading4-size: 1em;
+  --r-code-font: monospace;
+  --r-link-color: #99be00;
+  --r-link-color-dark: #006490;
+  --r-link-color-hover: #005276;
+  --r-selection-background-color: #003366;
+  --r-selection-color: #0099dc;
+}
+
+.reveal-viewport {
+  background: #2b2b2b;
+  background-color: var(--r-background-color);
+}
+
+.reveal {
+  font-family: var(--r-main-font);
+  font-size: var(--r-main-font-size);
+  font-weight: normal;
+  color: var(--r-main-color);
+}
+
+.reveal ::selection {
+  color: var(--r-selection-color);
+  background: var(--r-selection-background-color);
+  text-shadow: none;
+}
+
+.reveal ::-moz-selection {
+  color: var(--r-selection-color);
+  background: var(--r-selection-background-color);
+  text-shadow: none;
+}
+
+.reveal .slides section,
+.reveal .slides section > section {
+  line-height: 1.3;
+  font-weight: inherit;
+}
+
+/*********************************************
+ * HEADERS
+ *********************************************/
+.reveal h1,
+.reveal h2,
+.reveal h3,
+.reveal h4,
+.reveal h5,
+.reveal h6 {
+  margin: var(--r-heading-margin);
+  color: var(--r-heading-color);
+  font-family: var(--r-heading-font);
+  font-weight: var(--r-heading-font-weight);
+  line-height: var(--r-heading-line-height);
+  letter-spacing: var(--r-heading-letter-spacing);
+  text-transform: var(--r-heading-text-transform);
+  text-shadow: var(--r-heading-text-shadow);
+  word-wrap: break-word;
+}
+
+.reveal h1 {
+  font-size: var(--r-heading1-size);
+}
+
+.reveal h2 {
+  font-size: var(--r-heading2-size);
+}
+
+.reveal h3 {
+  font-size: var(--r-heading3-size);
+}
+
+.reveal h4 {
+  font-size: var(--r-heading4-size);
+}
+
+.reveal h1 {
+  text-shadow: var(--r-heading1-text-shadow);
+}
+
+/*********************************************
+ * OTHER
+ *********************************************/
+.reveal p {
+  margin: var(--r-block-margin) 0;
+  line-height: 1.3;
+}
+
+/* Remove trailing margins after titles */
+.reveal h1:last-child,
+.reveal h2:last-child,
+.reveal h3:last-child,
+.reveal h4:last-child,
+.reveal h5:last-child,
+.reveal h6:last-child {
+  margin-bottom: 0;
+}
+
+/* Ensure certain elements are never larger than the slide itself */
+.reveal img,
+.reveal video,
+.reveal iframe {
+  max-width: 95%;
+  max-height: 95%;
+}
+
+.reveal strong,
+.reveal b {
+  font-weight: bold;
+}
+
+.reveal em {
+  font-style: italic;
+}
+
+.reveal ol,
+.reveal dl,
+.reveal ul {
+  display: inline-block;
+  text-align: left;
+  margin: 0 0 0 1em;
+}
+
+.reveal ol {
+  list-style-type: decimal;
+}
+
+.reveal ul {
+  list-style-type: disc;
+}
+
+.reveal ul ul {
+  list-style-type: square;
+}
+
+.reveal ul ul ul {
+  list-style-type: circle;
+}
+
+.reveal ul ul,
+.reveal ul ol,
+.reveal ol ol,
+.reveal ol ul {
+  display: block;
+  margin-left: 40px;
+}
+
+.reveal dt {
+  font-weight: bold;
+}
+
+.reveal dd {
+  margin-left: 40px;
+}
+
+.reveal blockquote {
+  display: block;
+  position: relative;
+  width: 70%;
+  margin: var(--r-block-margin) auto;
+  padding: 5px;
+  font-style: italic;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0px 0px 2px rgba(0, 0, 0, 0.2);
+}
+
+.reveal blockquote p:first-child,
+.reveal blockquote p:last-child {
+  display: inline-block;
+}
+
+.reveal q {
+  font-style: italic;
+}
+
+.reveal pre {
+  display: block;
+  position: relative;
+  width: 90%;
+  margin: var(--r-block-margin) auto;
+  text-align: left;
+  font-size: 0.6em;
+  font-family: var(--r-code-font);
+  line-height: 1.2em;
+  word-wrap: break-word;
+  box-shadow: 0px 5px 15px rgba(0, 0, 0, 0.15);
+}
+
+.reveal code {
+  font-family: var(--r-code-font);
+  text-transform: none;
+  tab-size: 2;
+  color: var(--r-heading-color);
+  display: inline-block;
+  border-radius: 7px;
+}
+
+.reveal small code {
+  vertical-align: baseline;
+}
+
+
+.reveal pre code {
+  display: block;
+  padding: 5px;
+  overflow: auto;
+  max-height: 400px;
+  word-wrap: normal;
+}
+
+.reveal .code-wrapper {
+  white-space: normal;
+}
+
+.reveal .code-wrapper code {
+  white-space: pre;
+}
+
+.reveal table {
+  margin: auto;
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+.reveal table th {
+  font-weight: bold;
+}
+
+.reveal table th,
+.reveal table td {
+  text-align: left;
+  padding: 0.2em 0.5em 0.2em 0.5em;
+  border-bottom: 1px solid;
+}
+
+.reveal table th[align=center],
+.reveal table td[align=center] {
+  text-align: center;
+}
+
+.reveal table th[align=right],
+.reveal table td[align=right] {
+  text-align: right;
+}
+
+.reveal table tbody tr:last-child th,
+.reveal table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.reveal sup {
+  vertical-align: super;
+  font-size: smaller;
+}
+
+.reveal sub {
+  vertical-align: sub;
+  font-size: smaller;
+}
+
+.reveal small {
+  display: inline-block;
+  font-size: 0.6em;
+  line-height: 1.2em;
+  vertical-align: top;
+}
+
+.reveal small * {
+  vertical-align: top;
+}
+
+.reveal img {
+  margin: var(--r-block-margin) 0;
+}
+
+/*********************************************
+ * LINKS
+ *********************************************/
+.reveal a {
+  color: var(--r-link-color);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.reveal a:hover {
+  color: var(--r-link-color-hover);
+  text-shadow: none;
+  border: none;
+}
+
+.reveal .roll span:after {
+  color: #fff;
+  background: var(--r-link-color-dark);
+}
+
+/*********************************************
+ * Frame helper
+ *********************************************/
+.reveal .r-frame {
+  border: 4px solid var(--r-main-color);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.15);
+}
+
+.reveal a .r-frame {
+  transition: all 0.15s linear;
+}
+
+.reveal a:hover .r-frame {
+  border-color: var(--r-link-color);
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.55);
+}
+
+/*********************************************
+ * NAVIGATION CONTROLS
+ *********************************************/
+.reveal .controls {
+  color: var(--r-link-color);
+}
+
+/*********************************************
+ * PROGRESS BAR
+ *********************************************/
+.reveal .progress {
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--r-link-color);
+}
+
+/*********************************************
+ * PRINT BACKGROUND
+ *********************************************/
+@media print {
+  .backgrounds {
+    background-color: var(--r-background-color);
+  }
+}
+.reveal {
+  background-image: url("data:image/svg+xml;utf8,<svg width='255.03' height='256.37' version='1.1' viewBox='0 0 255.03 256.37' xml:space='preserve' xmlns='http://www.w3.org/2000/svg' xmlns:cc='http://creativecommons.org/ns%23' xmlns:dc='http://purl.org/dc/elements/1.1/' xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns%23'><metadata><rdf:RDF><cc:Work rdf:about=''><dc:format>image/svg+xml</dc:format><dc:type rdf:resource='http://purl.org/dc/dcmitype/StillImage'/></cc:Work></rdf:RDF></metadata><g transform='matrix(1.3333 0 0 -1.3333 0 256.37)'><g transform='scale(.1)'><path d='m1284.3 962.94c97.11-19.757 129.54-31.828 129.54-68.156 0-33.309-32.18-57.519-86.56-57.519-58.67 0-96.12 27.25-99.2 67.609h-60.11c-3.49 86.562-81.92 124.1-177.75 142.3-96.25 18.26-127.91 31.28-127.91 67.6 0 32.29 29.879 54.5 82.926 54.5 53.133 0 85.47-25.1 90.74-61.87h79.67c0.71-70.96 58.09-121.98 168.66-144.46zm-334.98-125.68c-58.676 0-96.125 27.25-99.199 67.609h-196.31c-14.738-33.43-52.727-62.41-108.14-62.41-72.539 0-129.53 54.582-134.39 118.92h388.56c2.895 10.996 3.879 23.984 3.891 38.949 26.441-16.254 60.703-28.875 102.6-37.395 97.111-19.757 129.54-31.828 129.54-68.156 0-33.309-32.17-57.519-86.56-57.519zm-403.64 324.79c67.25 0 117.52-44.58 134.39-100.76h-263.91c18.148 56.64 66.797 100.76 129.53 100.76zm777.52 7.22c53.13 0 85.47-25.1 90.74-61.87h116.7c-1.29 44.29-20.64 81.04-58.15 109.3-38.86 29.27-88.97 44.4-150.32 44.4-134.48 0-179.69-69.59-189.18-85.75-9.43 15.31-57.09 85.75-188.78 85.75-141.19 0-184.87-75.43-194.4-95.66-42.066 53.85-107.7 95.66-205.1 95.66-74.992 0-137.32-24.22-186-72.66-49.668-49.45-74.016-111-74.016-186.69s24.348-137.24 74.016-185.69c48.687-48.441 111.01-72.672 186-72.672 123.81 0 184.71 70.321 202.04 90.352 10.23-16.602 62.269-90.352 203.6-90.352 130.18 0 179.62 61.704 188.04 71.934 10.72-12.641 63.66-71.934 189.93-71.934 64.41 0 116.56 14.133 157.46 43.411 39.88 29.261 60.33 66.601 60.33 112.01 0 90.907-79.87 129.74-177.92 148.36-96.25 18.26-127.91 31.28-127.91 67.6 0 32.29 29.87 54.5 82.92 54.5zm442.34 348.78c-102.57 126.65-245.16 208.73-412.38 237.33-3.01 0.52-5.9-0.94-7.33-3.44-0.41-0.71-0.71-1.49-0.85-2.34-0.66-3.86 1.93-7.52 5.79-8.18 163.78-28.03 303.39-108.35 403.76-232.29 117.84-145.52 165.72-333.34 134.8-528.85-30.95-195.79-137.18-375.82-299.1-506.95-98.04-79.391-208.14-134.72-327.24-164.45-91.42-22.821-185.79-29.153-276.4-18.832 99.602 10.062 196.6 40.902 283.82 90.589 109.74 62.532 201.33 153.73 264.84 263.73 57.67 99.891 89.7 208.55 95.19 322.97 5.24 109.15-15.04 219.96-58.67 320.45-1.56 3.59-5.73 5.24-9.32 3.68s-5.23-5.73-3.68-9.32c42.76-98.51 62.65-207.14 57.51-314.13-5.38-112.14-36.77-218.64-93.31-316.56-62.25-107.83-152.02-197.22-259.59-258.51-104.4-59.481-223.11-91.402-343.3-92.32-3.629-0.032-6.653-2.789-7.004-6.391-0.356-3.609 2.066-6.898 5.613-7.641 111.88-23.277 232.13-20.328 347.73 8.532 121.12 30.238 233.07 86.488 332.74 167.19 164.64 133.33 272.67 316.49 304.18 515.75 31.54 199.54-17.4 391.31-137.8 539.99zm-417.71-1261.5c-3.01 2.5-7.48 2.089-9.98-0.93-106.16-127.81-245.53-208.57-403.04-233.52-184.95-29.289-371.54 23.16-525.4 147.68-154.09 124.7-256.88 306.71-289.48 512.5-19.739 124.61-12.606 247.63 21.199 365.63 25.953 90.59 67.652 175.47 121.89 248.78-41.082-91.28-62.879-190.7-63.457-291.08-0.722-126.31 32.465-251.23 95.977-361.23 57.672-99.891 135.76-181.95 232.1-243.93 91.903-59.109 198.02-96.941 306.86-109.41 3.887-0.442 7.398 2.34 7.84 6.238 0.445 3.883-2.344 7.391-6.231 7.84-106.69 12.23-210.71 49.32-300.8 107.26-94.421 60.73-170.96 141.17-227.49 239.08-62.258 107.83-94.789 230.27-94.078 354.07 0.688 120.16 32.399 238.93 91.695 343.47 1.786 3.16 0.907 7.16-2.031 9.26-2.945 2.11-7.008 1.66-9.422-1.04-76.097-85.25-133.67-190.86-166.48-305.41-34.383-120.01-41.637-245.08-21.578-371.75 33.144-209.26 137.76-394.39 294.56-521.3 157.03-127.09 347.57-180.58 536.54-150.66 160.97 25.5 303.35 107.96 411.73 238.47 1.95 2.34 2.12 5.566 0.69 8.066-0.41 0.711-0.95 1.364-1.61 1.911zm-1291 1219c67.106 174.83 205.82 310.2 390.59 381.18 185.04 71.09 394.06 69.11 588.58-5.56 117.78-45.21 220.75-112.89 306.05-201.17 65.47-67.77 118.13-146.32 154.5-229.95-58.51 81.21-133.71 149.8-220.35 200.49-109.04 63.79-233.81 97.5-360.83 97.5-115.34 0-225.46-26.6-327.29-79.05-97.148-50.03-182.97-123.01-248.18-211.03-2.332-3.15-1.672-7.58 1.472-9.91 3.141-2.33 7.578-1.67 9.914 1.47 63.934 86.29 148.06 157.82 243.28 206.87 99.805 51.41 207.74 77.48 320.8 77.48 124.51 0 246.8-33.05 353.67-95.56 103.72-60.68 190.72-147.53 251.61-251.15 1.83-3.13 5.73-4.36 9.03-2.87 3.3 1.5 4.94 5.24 3.81 8.67-35.78 108.54-98.46 211.2-181.25 296.89-86.75 89.77-191.43 158.6-311.16 204.56-197.8 75.93-410.43 77.89-598.74 5.55-188.57-72.45-330.18-210.71-398.75-389.32-58.402-152.15-58.176-316.68 0.6524-475.81 1.0586-2.86 3.7695-4.62 6.6484-4.62 0.8164 0 1.6445 0.14 2.457 0.43 3.6719 1.36 5.5469 5.44 4.1875 9.11-57.617 155.84-57.863 316.92-0.7109 465.8' fill='rgb(0%2C153%2C220%2C1)'/></g></g></svg>"), url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect x='0' y='0' width='100%' height='100%' fill='rgb(255%2C255%2C255%2C1)'/><rect x='0' y='6.5%' width='2.4%' height='93.5%' fill='rgb(0%2C153%2C220%2C1)'/></svg>");
+  background-size: auto 10%, 100% 100%;
+  background-position: top 15px right 15px, center;
+  background-repeat: no-repeat;
+  color: #000;
+}
+
+.reveal .slides section {
+  background: transparent;
+}
+
+.reveal .slides section a {
+  color: #0099dc;
+}
+
+.reveal .slides .title {
+  background: transparent;
+}
+
+.reveal .slides section .name {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.reveal .name .content {
+  grid-column-start: 1;
+  grid-column-end: 3;
+  grid-row-start: 1;
+  grid-row-end: 2;
+}
+
+
+.reveal .title .description {
+  font-weight: bolder;
+  color: #fff;
+}
+
+.reveal .title .credit {
+  background-color: rgba(255, 255, 255, 0.8);
+  color: #003366;
+  grid-column-start: 2;
+  grid-column-end: 3;
+  grid-row-start: 2;
+  grid-row-end: 3;
+}
+
+
+.reveal .slides {
+  text-align: left;
+}
+

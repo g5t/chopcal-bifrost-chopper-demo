@@ -7,24 +7,36 @@ The plane diagram is computed by chopcal itself, so its transmitted region is th
 """
 from __future__ import annotations
 
+import functools
+
 import numpy as np
 
 H_OVER_M = 3956.034   # Å m/s
 FONT = 17
 
 
-def _style():
+def style():
+    """The fonts these diagrams are drawn with, for a `with` block. Create any axes passed
+    in inside it too; the rest of a notebook keeps its own."""
     import matplotlib
-    matplotlib.rcParams.update({'font.size': FONT, 'axes.titlesize': FONT + 1,
-                                'axes.labelsize': FONT})
+    return matplotlib.rc_context({'font.size': FONT, 'axes.titlesize': FONT + 1,
+                                  'axes.labelsize': FONT})
 
 
+def _styled(draw):
+    @functools.wraps(draw)
+    def styled(*args, **kwargs):
+        with style():
+            return draw(*args, **kwargs)
+    return styled
+
+
+@_styled
 def disc(ax=None):
     """A disc seen along the beam, a moment before its zero mark reaches the beam, with
     every angle chopcal asks for drawn on it."""
     import matplotlib.pyplot as plt
     from matplotlib.patches import Arc, Circle, FancyArrowPatch, Rectangle, Wedge
-    _style()
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8), layout='constrained')
     # angles clockwise from the top, as a turning disc's edges reach the beam there
@@ -70,6 +82,7 @@ def disc(ax=None):
     return ax.figure
 
 
+@_styled
 def plane(axes=None):
     """Two discs, their openings as bands in (emission time, wavelength), and what passes
     both: on the left in time and distance, on the right in the source's plane."""
@@ -77,7 +90,6 @@ def plane(axes=None):
     from matplotlib.patches import Polygon
     from chopcal.lib import Chopper, Region, wavelength_to_inverse_velocity
     from phasespace import swept
-    _style()
     if axes is None:
         _, axes = plt.subplots(1, 2, figsize=(16, 7), layout='constrained')
     left, right = axes
@@ -114,22 +126,22 @@ def plane(axes=None):
     left.set_ylim(-1, far + 5)
     left.set_xlabel('time [ms]')
     left.set_ylabel('distance [m]')
-    left.set_title('time–distance: a disc is a line, broken where it is open')
+    left.set_title('time–distance:\na disc is a line, broken where it is open')
     right.set_xlim(t0 * 1e3, t1 * 1e3)
     right.set_ylim(w0, w1)
     right.set_xlabel('emission time [ms]')
     right.set_ylabel('wavelength [Å]')
-    right.set_title('the source plane: each opening is a band')
+    right.set_title('the source plane:\neach opening is a band')
     handles, labels = right.get_legend_handles_labels()
     unique = dict(zip(labels, handles))
     right.legend(unique.values(), unique.keys(), loc='upper right')
     return right.figure
 
 
+@_styled
 def ramp(ax=None):
     """What one disc passes against time: a point beam, and a beam with width."""
     import matplotlib.pyplot as plt
-    _style()
     if ax is None:
         _, ax = plt.subplots(figsize=(13, 5.5), layout='constrained')
     opening, aperture = 4.0, 1.6        # in units of time at the disc
