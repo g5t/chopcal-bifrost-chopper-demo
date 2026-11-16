@@ -13,5 +13,8 @@ dependencies = [
     "jupyterlab",
 ]
 
+[project.optional-dependencies]
+app = ["voila"]   # app.ipynb, served on its own: voila app.ipynb
+
 [tool.uv]
 package = false

@@ -1,7 +1,13 @@
-# `chopcal` for BIFROST
+# `chopcal` for BIFROST and T-REX
 
-An interactive notebook showing the ESS source BIFROST sees put through its six choppers,
-computed exactly by [`chopcal`](https://pypi.org/project/chopcal/).
+Interactive notebooks showing the ESS source an instrument sees put through its choppers,
+computed exactly by [`chopcal`](https://pypi.org/project/chopcal/): BIFROST in
+`bifrost_phasespace.ipynb`, T-REX in `trex_phasespace.ipynb`. What follows describes
+BIFROST's; T-REX's is the same figure, with its own settings (central wavelength L0,
+repetition rate multiplication of 4 to 24 in steps of 4, HF or HR), a zoom on its M
+choppers rather than on those near the source, an *M2 turned over* toggle, and guide
+transmission tables for its bispectral bender out and in (`trex_guide_transmission_bender_*.csv`),
+picked by a *bender in* toggle.
 
 - **Left:** the source over (emission time, wavelength), in neutrons per second into the
   guide's entrance, from `ess_butterfly.py`, with the region the chopper train transmits
@@ -17,7 +23,8 @@ computed exactly by [`chopcal`](https://pypi.org/project/chopcal/).
   chopper is a line with gaps where it is open.
 
 The controls set the lowest energy and pulse-shaping time chopcal places the band at, the
-source rectangle and the grid it is binned on, a pulse delay that moves every disc
+source rectangle and the grid it is binned on (with the arrival-time grid, whose bins
+the wavelength moments are taken over), a pulse delay that moves every disc
 together (as ESS's `BeamPosDly-S` does), and the fastest the pulse-shaping disks may turn,
 as a harmonic of 14 Hz: the designed disks are rated to 210 Hz, the substitutes installed
 now to 126 Hz. The speed chopcal picks, which a long burst can make slower, is shown under
@@ -34,14 +41,14 @@ The *guide transmission* toggle, on by default, adds what reaches the sample thr
 real guide to the arrival-time plot, on a second axis. It also makes the wavelength plot
 show intensity through the guide, and weights the source on the left by it. The
 weight is the fraction of what enters the guide that reaches a 10 × 30 mm sample window,
-from `guide_transmission.csv`: a McStas scan of niess's BIFROST with the choppers removed
+from `bifrost_guide_transmission.csv`: a McStas scan of niess's BIFROST with the choppers removed
 (10⁶ rays per point, 0.5–12 Å). Outside that range it holds the end values.
 
-If the train opens more than one region of the source, the one transmitting the most is
-the main region, outlined in red; the others are spurious, outlined in purple. Both
-profiles then split what reaches the sample into the two, with the spurious part in
-purple (dotted red through the guide), and the title gives its total and its fraction of
-the main. It is usually many orders of magnitude down, so use *log intensities* to see
+If the train opens more than one region of the source, those emitted during the proton
+pulse are intended, outlined in red; any emitted only after it are spurious, outlined in
+purple. Both profiles then split what reaches the sample into the two, with the spurious
+part in purple (dotted red through the guide), and the title gives its total and its
+fraction of the intended. It is usually many orders of magnitude down, so use *log intensities* to see
 it; the log axes reach down to it. That makes the decay-time factor matter: the
 spurious regions sit late in the pulse, where the source is extrapolated.
 
@@ -79,29 +86,68 @@ jupyter lab bifrost_phasespace.ipynb
 
 ## Files
 
-- `bifrost_phasespace.ipynb`: the notebook.
+- `bifrost_phasespace.ipynb`, `trex_phasespace.ipynb`, `in5_phasespace.ipynb`: the
+  notebooks.
+- `app.ipynb`, `presentation.qmd`: the instruments behind one drop-down, for Voila, and a
+  Quarto slide deck embedding it (see Presenting).
 - `ess_butterfly.py`: McStas's `ESS_butterfly` moderator for any beamline (3 cm
   moderator), as an absolute rate into (wavelength, emission time) bins. It is
   independent of BIFROST and of the rest, and `python ess_butterfly.py` checks it against
   McStas's own intensities into BIFROST's guide.
-- `guide_transmission.csv`: the guide's transmission against wavelength.
-- `polygonfigure.py`: the calculation and the plotting, in three layers usable on their
-  own:
-  - `transmission(...)` computes one setting and returns plain arrays, no plotting;
+- `phasespace.py`: the calculation and the plotting for any instrument, in layers usable
+  on their own:
+  - `Source`, where the neutrons come from, with its own controls: `ESS(beamline)`,
+    the pulsed ESS source, or `Continuous(spectrum)`, a steady one such as a reactor's,
+    where the choppers make the pulses and the time axis is time at the source;
+  - `Instrument`, what an instrument must say: its source, guide entrance, sample
+    distance, discs and how its settings set them, and its controls;
+  - `transmission(instrument, settings, ...)` computes one setting and returns plain
+    arrays, no plotting;
   - `make_axes()` and `draw(result, axes)` draw a result with matplotlib, for a script
     or a saved picture;
   - `draw_time_distance(result, ax)` draws only the time-distance diagram;
-  - `bifrost_transmitted_phasespace_figure(...)` wires both to ipywidgets controls.
+  - `figure(instrument, ...)` wires both to ipywidgets controls.
+- `bifrost.py`: BIFROST (beamline W4), its discs set by `chopcal.bifrost`.
+- `bifrost_guide_transmission.csv`: BIFROST's guide transmission against wavelength.
+- `trex.py`: T-REX (beamline W7), its discs phased as `trex_primary.instr` does.
+- `in5.py`: IN5 at the ILL, from McStas's `ILL_IN5.instr`: its Source_gen as a steady
+  source, six discs phased as the instr does, the pairs counter-rotating unless
+  `counter=False` (the instr turns all six the same way).
+- `in5_guide_transmission.csv`: what of IN5's Source_gen emission reaches a 10 x 25 mm
+  window at the sample, from a McStas scan of the instr without choppers
+  (bifrost-guide-transmission).
 
-`python polygonfigure.py` runs its self-checks.
+`python phasespace.py`, `python bifrost.py`, `python trex.py` and `python in5.py` run the
+self-checks.
+
+## Presenting
+
+`app.ipynb` puts every instrument behind one drop-down, BIFROST first, each figure built
+the first time it is picked and kept after, sized with its controls for a 1920 x 1080
+slide. `presentation.qmd` is a Quarto reveal.js skeleton: one slide embeds the live app,
+and static slides after it, computed when the deck is rendered, stand in if it is not
+running.
+
+```sh
+uv sync --extra app
+uv run voila app.ipynb --no-browser --port=8866 \
+    --Voila.tornado_settings="{'headers': {'Content-Security-Policy': 'frame-ancestors *'}}"
+QUARTO_PYTHON=$PWD/.venv/bin/python quarto preview presentation.qmd   # in another shell
+```
+
+The live slide only shows the app if both are served over HTTP: Voila's default policy
+lets no other page embed it, and `frame-ancestors *` does not cover a deck opened as a
+file. `quarto preview`, or any local web server for the rendered `presentation.html`,
+does it.
 
 ## Without Jupyter
 
 ```python
 import matplotlib.pyplot as plt
-from polygonfigure import draw, make_axes, transmission
+from bifrost import BIFROST
+from phasespace import draw, make_axes, transmission
 
-result = transmission(energy_min=4.5, shaping_time=2e-4)   # meV, s
+result = transmission(BIFROST, dict(energy_min=4.5, shaping_time=2e-4))   # meV, s
 fig, axes = make_axes()
 draw(result, axes)
 fig.savefig('bifrost.png')
