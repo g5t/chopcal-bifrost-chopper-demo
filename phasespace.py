@@ -15,7 +15,8 @@ numbers serve a notebook and a static picture:
 
 - `transmission` computes everything for one instrument and setting, with no plotting;
 - `draw` puts a result on `make_axes`'s axes;
-- `figure` wires both to ipywidgets controls.
+- `Session` holds one figure's controls and state, with no GUI toolkit;
+- `figure` wires it to ipywidgets; `gtk_app` to Gtk.
 
 Needs chopcal >= 0.8 (`Region.transmit_weighted`, `beam_aperture(..., at='centre')`,
 `Region.arrival_moments`).
@@ -56,7 +57,7 @@ class Source:
         return True
 
     def controls(self) -> dict:
-        """ipywidgets for the settings, by name."""
+        """`controls` for the settings, by name."""
         return {}
 
     def settings(self, values: dict) -> dict:
@@ -90,15 +91,13 @@ class ESS(Source):
         return min(t for p in polygons for _, t in p) < pulse_duration
 
     def controls(self):
-        from ipywidgets import FloatSlider
+        from controls import Number
         return {
-            'pulse_duration': FloatSlider(value=ess_butterfly.PULSE_DURATION * 1e3, min=0.1,
-                                          max=3.0, step=0.01, readout_format='.3f',
-                                          description='proton pulse [ms]'),
-            'power': FloatSlider(value=ess_butterfly.REFERENCE_POWER, min=0.1, max=5.0,
-                                 step=0.1, description='power at full pulse [MW]'),
-            'decay_scale': FloatSlider(value=1.0, min=0.25, max=4.0, step=0.05,
-                                       description='decay time ×'),
+            'pulse_duration': Number('proton pulse [ms]', ess_butterfly.PULSE_DURATION * 1e3,
+                                     0.1, 3.0, 0.01, format='.3f'),
+            'power': Number('power at full pulse [MW]', ess_butterfly.REFERENCE_POWER,
+                            0.1, 5.0, 0.1),
+            'decay_scale': Number('decay time ×', 1.0, 0.25, 4.0, 0.05),
         }
 
     def settings(self, values):
@@ -132,9 +131,8 @@ class Continuous(Source):
         return np.outer(np.diff(t) / (t[-1] - t[0]), per_bin)
 
     def controls(self):
-        from ipywidgets import FloatLogSlider
-        return {'scale': FloatLogSlider(value=1.0, min=-2, max=1, step=0.05,
-                                        readout_format='.3g', description='flux ×')}
+        from controls import Number
+        return {'scale': Number('flux ×', 1.0, 0.01, 10.0, 0.05, log=True, format='.3g')}
 
 
 class Instrument:
@@ -171,7 +169,7 @@ class Instrument:
         raise NotImplementedError
 
     def controls(self, **initial) -> dict:
-        """ipywidgets for the settings, by name; changing one resets the delays."""
+        """`controls` for the settings, by name; changing one resets the delays."""
         raise NotImplementedError
 
     def settings(self, values: dict) -> dict:
@@ -890,116 +888,181 @@ def ensure_widget_backend(quiet: bool = False) -> bool:
     return True
 
 
+class Session:
+    """One instrument's figure, apart from any GUI toolkit: its controls, their values,
+    the delay of each disc and whether it is parked, and what they come to. A front end
+    makes a widget for each control, and tells the session when one changes:
+
+    - `set` a control's value; one of the instrument's own resets the delays to what
+      the settings say (`follow`), so the front end should then show `delays` again;
+    - `set_delay` (ms) and `park` a disc by hand;
+    - `draw` on `make_axes`'s axes, then show `status`, `note` and `power`.
+    """
+
+    def __init__(self, instrument: Instrument, **initial):
+        from controls import Number, Range, Switch
+        self.instrument = instrument
+        self.own = instrument.controls(**initial)   # what the delays follow
+        self.source = instrument.source.controls()
+        self.controls = {
+            **self.own,
+            'latest_emission': Number('last emission [ms]', instrument.latest_emission * 1e3,
+                                      0.5, 20.0, 0.1),
+            'wavelength_range': Range('wavelengths [Å]', instrument.wavelength_range,
+                                      0.2, 19.9, 0.1),
+            **self.source,
+            # the grids, on log scales: an instrument selecting narrow strips needs fine ones
+            'time_bin': Number('time bin [µs]', instrument.time_bin * 1e6, 1.0, 200.0, 0.05,
+                               log=True, format='.3g'),
+            'wavelength_bin': Number('wavelength bin [Å]', instrument.wavelength_bin,
+                                     1e-3, 0.5, 0.05, log=True, format='.3g'),
+            'arrival_bin': Number('arrival bin [µs]', instrument.arrival_bin * 1e6,
+                                  1.0, 1e3, 0.05, log=True, format='.3g'),
+            'pulse_delay': Number('pulse delay [µs]', 0.0, -1000.0, 1000.0, 10.0),
+            'log': Switch('log intensities', False),
+        }
+        if instrument.guide_table is not None:
+            self.controls['guide'] = Switch('guide transmission', True)
+        self.values = {k: c.value for k, c in self.controls.items()}
+        # one delay per disc, following the instrument's settings, and free to move by
+        # hand until one of those changes; the ranges widen if the settings ever go
+        # beyond them. Each disc can be parked: stopped open.
+        self.delays = {n: Number(f'{n} delay [ms]', 0.0, lo, hi, 0.01)
+                       for n, (lo, hi) in instrument.delay_ranges_ms.items()}
+        self.parked = {n: False for n in instrument.names}
+        self.suggested = {n: '' for n in instrument.names}   # what the settings say now
+        self.status = self.note = self.power = ''
+        self._colorbar = None
+        self.follow()
+
+    def settings(self) -> dict:
+        return self.instrument.settings({k: self.values[k] for k in self.own})
+
+    def set(self, name, value):
+        self.values[name] = value
+        if name in self.own:
+            self.follow()
+
+    def set_delay(self, name, value):
+        self.delays[name].value = value
+
+    def park(self, name, parked=True):
+        self.parked[name] = parked
+
+    def follow(self):
+        """Every delay to what the instrument's settings say, widening its range."""
+        discs = [disc for disc, _ in self.instrument.choppers(**self.settings())]
+        for n, disc in zip(self.instrument.names, discs):
+            value, delay = disc.delay * 1e3, self.delays[n]
+            self.suggested[n] = f'set {value:.3f}'
+            delay.min, delay.max = min(delay.min, value), max(delay.max, value)
+            delay.value = value
+
+    def transmission(self) -> 'Transmission':
+        v, instrument = self.values, self.instrument
+        return transmission(instrument, self.settings(),
+                            wavelength_range=v['wavelength_range'],
+                            latest_emission=v['latest_emission'] * 1e-3,
+                            wavelength_bin=v['wavelength_bin'],
+                            time_bin=v['time_bin'] * 1e-6,
+                            arrival_bin=v['arrival_bin'] * 1e-6,
+                            pulse_delay=v['pulse_delay'] * 1e-6,
+                            delays={n: d.value * 1e-3 for n, d in self.delays.items()},
+                            parked=tuple(n for n, p in self.parked.items() if p),
+                            **instrument.source.settings({k: v[k] for k in self.source}))
+
+    def draw(self, axes) -> 'Transmission':
+        """Compute, draw on `axes` and update the texts; the canvas is the caller's."""
+        result = self.transmission()
+        v = self.values
+        self._colorbar = draw(result, axes, colorbar=self._colorbar, log=v['log'],
+                              guide=v.get('guide', False))
+        self.status = (f'{result.source.shape[1]} x {result.source.shape[0]} bins; '
+                       f'{len(result.outline)} transmitted polygon(s)'
+                       + (f'; every disc moved {result.source_delay * 1e3:.3f} ms to '
+                          'start between regions' if result.source_delay else ''))
+        self.note = self.instrument.note(result, {k: v[k] for k in self.own})
+        self.power = self.instrument.source.note({k: v[k] for k in self.source})
+        return result
+
+
 def _figure(instrument: Instrument, figsize=(12, 10), **initial):
-    from ipywidgets import (Checkbox, FloatLogSlider, FloatRangeSlider, FloatSlider, HBox,
-                            HTML, Label, Layout, ToggleButton, VBox)
+    from ipywidgets import HBox, HTML, Label, Layout, ToggleButton, VBox
     import matplotlib.pyplot as plt
+    from controls import ipywidget
 
+    session = Session(instrument, **initial)
     style = {'description_width': '9em'}
-    wide = Layout(width='26em')
-    own = instrument.controls(**initial)   # what the delays follow
-    source = instrument.source.controls()
-    controls = {
-        **own,
-        'latest_emission': FloatSlider(value=instrument.latest_emission * 1e3, min=0.5,
-                                       max=20.0, step=0.1, description='last emission [ms]'),
-        'wavelength_range': FloatRangeSlider(value=instrument.wavelength_range, min=0.2,
-                                             max=19.9, step=0.1,
-                                             description='wavelengths [Å]'),
-        **source,
-        # the grids, on log scales: an instrument selecting narrow strips needs fine ones
-        'time_bin': FloatLogSlider(value=instrument.time_bin * 1e6, min=0, max=np.log10(200),
-                                   step=0.05, readout_format='.3g',
-                                   description='time bin [µs]'),
-        'wavelength_bin': FloatLogSlider(value=instrument.wavelength_bin, min=-3,
-                                         max=np.log10(0.5), step=0.05, readout_format='.3g',
-                                         description='wavelength bin [Å]'),
-        'arrival_bin': FloatLogSlider(value=instrument.arrival_bin * 1e6, min=0, max=3,
-                                      step=0.05, readout_format='.3g',
-                                      description='arrival bin [µs]'),
-        'pulse_delay': FloatSlider(value=0.0, min=-1000.0, max=1000.0, step=10.0,
-                                   description='pulse delay [µs]'),
-        'log': Checkbox(value=False, description='log intensities'),
-    }
-    if instrument.guide_table is not None:
-        controls['guide'] = Checkbox(value=True, description='guide transmission')
-    for widget in controls.values():
-        widget.style, widget.layout, widget.continuous_update = style, wide, False
-
-    # one delay per disc, following the instrument's settings, and free to move by hand
-    # until one of those changes; the ranges widen if the settings ever go beyond them.
-    # Each disc can be parked: stopped open.
-    delays = {n: FloatSlider(value=0.0, min=lo, max=hi, step=0.01, readout_format='.2f',
-                             description=f'{n} delay [ms]', continuous_update=False,
-                             style=style, layout=Layout(width='22em'))
-              for n, (lo, hi) in instrument.delay_ranges_ms.items()}
+    controls = {k: ipywidget(c, style=style, layout=Layout(width='26em'),
+                             continuous_update=False)
+                for k, c in session.controls.items()}
+    delays = {n: ipywidget(d, style=style, layout=Layout(width='22em'),
+                           continuous_update=False)
+              for n, d in session.delays.items()}
     parked = {n: ToggleButton(value=False, description='parked',
                               tooltip='stopped open: passes everything',
                               layout=Layout(width='6em'))
               for n in instrument.names}
-    suggested = {n: Label() for n in instrument.names}   # what the settings say now
-    state = {'colorbar': None, 'syncing': False}
-
-    def settings():
-        return instrument.settings({k: w.value for k, w in own.items()})
-
-    def follow(*_):
-        discs = [disc for disc, _ in instrument.choppers(**settings())]
-        state['syncing'] = True   # one redraw for all of them, not one each
-        try:
-            for n, disc in zip(instrument.names, discs):
-                value = disc.delay * 1e3
-                suggested[n].value = f'set {value:.3f}'
-                delays[n].min = min(delays[n].min, value)
-                delays[n].max = max(delays[n].max, value)
-                delays[n].value = value
-        finally:
-            state['syncing'] = False
+    suggested = {n: Label() for n in instrument.names}
+    syncing = [False]   # one redraw for all the delays, not one each
 
     with plt.ioff():
         fig, axes = make_axes(figsize)
     fig.canvas.header_visible = False   # ipympl's "Figure 1": noise on a slide
-    status = Label()
-    note = Label()      # the instrument's: what its settings come to
-    power = Label()     # the source's: e.g. what the beam delivers with this pulse
+    status, note, power = Label(), Label(), Label()
+
+    def show_delays():
+        syncing[0] = True
+        try:
+            for n, d in session.delays.items():
+                suggested[n].value = session.suggested[n]
+                delays[n].min = min(delays[n].min, d.min)
+                delays[n].max = max(delays[n].max, d.max)
+                delays[n].value = d.value
+        finally:
+            syncing[0] = False
 
     def update(*_):
-        if state['syncing']:
+        if syncing[0]:
             return
-        v = {k: w.value for k, w in controls.items()}
-        stopped = tuple(n for n in instrument.names if parked[n].value)
         for n in instrument.names:
-            delays[n].disabled = n in stopped
-        result = transmission(instrument, settings(),
-                              wavelength_range=v['wavelength_range'],
-                              latest_emission=v['latest_emission'] * 1e-3,
-                              wavelength_bin=v['wavelength_bin'],
-                              time_bin=v['time_bin'] * 1e-6,
-                              arrival_bin=v['arrival_bin'] * 1e-6,
-                              pulse_delay=v['pulse_delay'] * 1e-6,
-                              delays={n: w.value * 1e-3 for n, w in delays.items()},
-                              parked=stopped, **instrument.source.settings(
-                                  {k: v[k] for k in source}))
-        state['colorbar'] = draw(result, axes, colorbar=state['colorbar'], log=v['log'],
-                                 guide=v.get('guide', False))
+            delays[n].disabled = parked[n].value
+        session.draw(axes)
         fig.canvas.draw_idle()
-        status.value = (f'{result.source.shape[1]} x {result.source.shape[0]} bins; '
-                        f'{len(result.outline)} transmitted polygon(s)'
-                        + (f'; every disc moved {result.source_delay * 1e3:.3f} ms to '
-                           'start between regions' if result.source_delay else ''))
-        note.value = instrument.note(result, {k: w.value for k, w in own.items()})
-        power.value = instrument.source.note({k: v[k] for k in source})
+        status.value, note.value, power.value = session.status, session.note, session.power
 
-    for widget in own.values():   # before `update`, so the delays are the settings' first
-        widget.observe(follow, names='value')
-    for widget in [*controls.values(), *delays.values(), *parked.values()]:
-        widget.observe(update, names='value')
-    follow()
+    def changed(name):
+        def on_change(change):
+            session.set(name, change['new'])
+            if name in session.own:
+                show_delays()
+            update()
+        return on_change
+
+    def delay_changed(name):
+        def on_change(change):
+            if not syncing[0]:
+                session.set_delay(name, change['new'])
+                update()
+        return on_change
+
+    def park_changed(name):
+        def on_change(change):
+            session.park(name, change['new'])
+            update()
+        return on_change
+
+    for name, widget in controls.items():
+        widget.observe(changed(name), names='value')
+    for n in instrument.names:
+        delays[n].observe(delay_changed(n), names='value')
+        parked[n].observe(park_changed(n), names='value')
+    show_delays()
     update()
     widgets = list(controls.values())
-    widgets.insert(len(own), note)
-    if source:
-        widgets.insert(widgets.index(controls[list(source)[-1]]) + 1, power)
+    widgets.insert(len(session.own), note)
+    if session.source:
+        widgets.insert(widgets.index(controls[list(session.source)[-1]]) + 1, power)
     rows = [HBox([delays[n], parked[n], suggested[n]]) for n in instrument.names]
     return HBox([fig.canvas, VBox([*widgets, status, HTML('<b>choppers</b>'), *rows])])
 

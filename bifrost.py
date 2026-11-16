@@ -49,16 +49,13 @@ class Bifrost(Instrument):
         return [(settings[n], wide if n.startswith('bw') else narrow) for n in self.names]
 
     def controls(self, energy_min=4.5, shaping_time=0.2, psc_speed_max=PSC_SPEED_MAX):
-        from ipywidgets import FloatSlider, SelectionSlider
+        from controls import Choice, Number
         return {
-            'energy_min': FloatSlider(value=energy_min, min=1.0, max=20.0, step=0.1,
-                                      description='lowest energy [meV]'),
-            'shaping_time': FloatSlider(value=shaping_time, min=0.05, max=4.0, step=0.05,
-                                        description='shaping time [ms]'),
+            'energy_min': Number('lowest energy [meV]', energy_min, 1.0, 20.0, 0.1),
+            'shaping_time': Number('shaping time [ms]', shaping_time, 0.05, 4.0, 0.05),
             # the disks turn at a harmonic of 14 Hz, so their limit is one too
-            'psc_speed_max': SelectionSlider(options=[(f'{14 * n} Hz', 14.0 * n)
-                                                      for n in range(1, 16)],
-                                             value=psc_speed_max, description='PSC limit'),
+            'psc_speed_max': Choice('PSC limit', [(f'{14 * n} Hz', 14.0 * n)
+                                                  for n in range(1, 16)], psc_speed_max),
         }
 
     def settings(self, values):

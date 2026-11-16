@@ -127,16 +127,15 @@ class Trex(Instrument):
         return out
 
     def controls(self, wavelength=2.4, rrm=4, mode='HF', flip_m2=False, bender=False):
-        from ipywidgets import Checkbox, FloatSlider, SelectionSlider, ToggleButtons
+        from controls import Choice, Number, Switch
         return {
-            'wavelength': FloatSlider(value=wavelength, min=0.5, max=8.0, step=0.01,
-                                      description='central λ, L0 [Å]'),
-            'rrm': SelectionSlider(options=RRM, value=rrm, description='RRM'),
-            'mode': ToggleButtons(options=['HF', 'HR'], value=mode, description='mode'),
-            'flip_m2': Checkbox(value=flip_m2, description='M2 turned over'),
+            'wavelength': Number('central λ, L0 [Å]', wavelength, 0.5, 8.0, 0.01),
+            'rrm': Choice('RRM', list(RRM), rrm),
+            'mode': Choice('mode', ['HF', 'HR'], mode, buttons=True),
+            'flip_m2': Switch('M2 turned over', flip_m2),
             # the bispectral switch: in, the cold bender deflects the cold moderator's
             # neutrons into the guide
-            'bender': Checkbox(value=bender, description='bender in'),
+            'bender': Switch('bender in', bender),
         }
 
     def zoom(self, wavelength=2.4, rrm=4, mode='HF', flip_m2=False, bender=False):
