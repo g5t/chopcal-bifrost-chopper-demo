@@ -13,8 +13,8 @@ picked by a *bender in* toggle.
   guide's entrance, from `ess_butterfly.py`, with the region the chopper train transmits
   outlined.
 - **Right:** what reaches the sample, by arrival time and by wavelength (energy along the
-  top). Dashed curves count the whole transmitted region as open; solid ones weight it by
-  how likely each neutron is to get through while a disc's edge is still sweeping the beam.
+  top), each neutron weighted by how likely it is to get through while a disc's edge is
+  still sweeping the beam.
   On a second axis of the wavelength pane, in green, is the wavelength spread σλ of the
   neutrons arriving together, against their mean wavelength: how well arrival time pins
   wavelength down.

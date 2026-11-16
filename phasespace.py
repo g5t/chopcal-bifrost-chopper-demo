@@ -246,14 +246,11 @@ class Transmission:
     outline: list                       # transmitted polygons as [(t, λ), ...]
     arrival_edges: np.ndarray           # s, at the sample
     at_sample: np.ndarray               # weighted amount per arrival bin
-    at_sample_support: np.ndarray       # the same counting the whole region as open
     by_wavelength: np.ndarray           # weighted amount per wavelength bin
     #: per arrival bin, the mean wavelength and its standard deviation, Å; NaN where
     #: nothing arrives -- what a time-of-flight measurement can know of a neutron's
     #: wavelength from when it reaches the sample
     spread: tuple
-    spread_support: tuple               # the same counting the whole region as open
-    by_wavelength_support: np.ndarray
     transmitted: float                  # weighted total
     emitted: float                      # total in the source rectangle
     speeds: list                        # Hz, each disc's, signed; 0 when parked
@@ -448,7 +445,7 @@ def transmission(instrument: Instrument, settings: dict | None = None,
                       default=time_edges[-1])
     openings = [[(0.0, until)] if n in parked else open_windows(chopper, until)
                 for n, chopper in zip(names, support_train)]
-    at_sample, at_sample_support = moments(weighted), moments(support)
+    at_sample = moments(weighted)
 
     # the intended regions and the spurious ones, as the instrument or its source says:
     # every cell the train opens goes to the region nearest it -- inside one, its own
@@ -478,10 +475,9 @@ def transmission(instrument: Instrument, settings: dict | None = None,
     return Transmission(
         wavelength_edges=wavelength_edges, time_edges=time_edges, source=amounts,
         outline=outline, arrival_edges=arrival_edges,
-        at_sample=at_sample.amount, at_sample_support=at_sample_support.amount,
+        at_sample=at_sample.amount,
         spread=(at_sample.wavelength, at_sample.sigma),
-        spread_support=(at_sample_support.wavelength, at_sample_support.sigma),
-        by_wavelength=by_wavelength(weighted), by_wavelength_support=by_wavelength(support),
+        by_wavelength=by_wavelength(weighted),
         transmitted=weighted.integrate(amounts, inverse_velocities, time_edges),
         emitted=float(amounts.sum()), guide=guide,
         speeds=[0.0 if n in parked else d.speed for n, d in zip(names, support_train)],
@@ -659,8 +655,6 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
 
     a = result.arrival_edges * 1e3
     step = np.diff(a)
-    time.stairs(result.at_sample_support / step, a, color='0.6', linestyle='--',
-                label='whole region open')
     spurious = result.transmitted_spurious > 0
     time.stairs((result.at_sample - result.at_sample_spurious) / step, a, color='C0',
                 linewidth=1.5, label='weighted, intended' if spurious
@@ -690,21 +684,18 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     time.legend(handles=handles, loc='upper left',
                 bbox_to_anchor=(1.2 if guide else 1.01, 1.0), fontsize='small')
     if log:
-        _log_intensity(time, result.at_sample_support / step,
-                       result.at_sample_spurious / step)
+        _log_intensity(time, result.at_sample / step, result.at_sample_spurious / step)
 
     wstep = np.diff(w)
     # the guide weights each wavelength bin by its own transmission, so it multiplies these
     through = result.guide if guide else 1.0
-    wavelength.stairs(result.by_wavelength_support * through / wstep, w, color='0.6',
-                      linestyle='--', label='whole region open')
     wavelength.stairs((result.by_wavelength - result.by_wavelength_spurious) * through
                       / wstep, w, color='C1', linewidth=1.5,
                       label='weighted, intended' if spurious else 'weighted by transmission')
     if spurious:
         wavelength.stairs(result.by_wavelength_spurious * through / wstep, w,
                           color=SPURIOUS, linewidth=1.3, label='weighted, spurious')
-    reached = np.nonzero(result.by_wavelength_support)[0]
+    reached = np.nonzero(result.by_wavelength)[0]
     if reached.size:
         lo, hi = w[max(reached[0] - 2, 0)], w[min(reached[-1] + 3, len(w) - 1)]
         wavelength.set_xlim(lo, hi)
@@ -715,15 +706,13 @@ def draw(result: Transmission, axes, title: str | None = None, colorbar=None,
     _energy_axis(top.xaxis, wavelength.get_xlim())
     top.set_xlabel('energy [meV]')
     if log:
-        _log_intensity(wavelength, result.by_wavelength_support * through / wstep,
+        _log_intensity(wavelength, result.by_wavelength * through / wstep,
                        result.by_wavelength_spurious * through / wstep)
     # the wavelength spread of what arrives together, against its mean wavelength
     spread = wavelength.twinx()
     spread.set_label('spread')
-    for (mean, sigma), style, label in (
-            (result.spread_support, dict(linestyle='--', linewidth=0.9), 'σλ, whole open'),
-            (result.spread, dict(linewidth=1.3), 'σλ, weighted')):
-        spread.plot(mean, sigma * 1e3, color='C2', label=label, **style)
+    mean, sigma = result.spread
+    spread.plot(mean, sigma * 1e3, color='C2', linewidth=1.3, label='σλ, weighted')
     spread.set_ylim(bottom=0.0)
     spread.set_ylabel('σλ per arrival time [mÅ]', color='C2')
     spread.tick_params(axis='y', colors='C2')
