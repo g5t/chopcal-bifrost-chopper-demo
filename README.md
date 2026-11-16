@@ -106,7 +106,12 @@ jupyter lab bifrost_phasespace.ipynb
   - `make_axes()` and `draw(result, axes)` draw a result with matplotlib, for a script
     or a saved picture;
   - `draw_time_distance(result, ax)` draws only the time-distance diagram;
-  - `figure(instrument, ...)` wires both to ipywidgets controls.
+  - `Session(instrument, ...)` holds one figure's controls, delays and parked discs,
+    and draws them, with no GUI toolkit;
+  - `figure(instrument, ...)` wires a session to ipywidgets controls.
+- `controls.py`: the controls an instrument or source offers -- `Number`, `Range`,
+  `Choice`, `Switch` -- without a toolkit, and their ipywidgets.
+- `gtk_app.py`: every instrument in a Gtk 4 window of its own (see A window of its own).
 - `bifrost.py`: BIFROST (beamline W4), its discs set by `chopcal.bifrost`.
 - `bifrost_guide_transmission.csv`: BIFROST's guide transmission against wavelength.
 - `trex.py`: T-REX (beamline W7), its discs phased as `trex_primary.instr` does.
@@ -139,6 +144,24 @@ The live slide only shows the app if both are served over HTTP: Voila's default 
 lets no other page embed it, and `frame-ancestors *` does not cover a deck opened as a
 file. `quarto preview`, or any local web server for the rendered `presentation.html`,
 does it.
+
+## A window of its own
+
+`gtk_app.py` is `app.ipynb` as a native Gtk 4 application: the same figure and controls,
+with matplotlib's zoom and pan toolbar, and no browser or Jupyter server.
+
+PyGObject builds against the system's Gtk, so `pip` alone rarely installs it; conda-forge
+has it ready-built:
+
+```sh
+micromamba create -p ./gtk-env -c conda-forge python=3.14 pygobject gtk4 pycairo \
+    matplotlib-base numpy pip
+./gtk-env/bin/pip install 'chopcal>=0.8'
+./gtk-env/bin/python gtk_app.py            # or: gtk_app.py T-REX, gtk_app.py IN5
+```
+
+A control recomputes once it has been still for 150 ms, so dragging a slider does not
+queue a calculation per step. Typing in a box beside a slider sets the value exactly.
 
 ## Without Jupyter
 
