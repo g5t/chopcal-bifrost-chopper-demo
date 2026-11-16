@@ -163,6 +163,36 @@ micromamba create -p ./gtk-env -c conda-forge python=3.14 pygobject gtk4 pycairo
 A control recomputes once it has been still for 150 ms, so dragging a slider does not
 queue a calculation per step. Typing in a box beside a slider sets the value exactly.
 
+### In an Apptainer image
+
+`chopcal-demo.def` builds the app, with Debian's Gtk 4, into one image:
+
+```sh
+apptainer build chopcal-demo.sif chopcal-demo.def
+apptainer run chopcal-demo.sif             # a window, on VISA or any X11 or Wayland desktop
+```
+
+The same image serves the app to a browser tab through Gtk's Broadway backend, which
+conda-forge's Gtk lacks, so a Jupyter launcher tile can open it. With
+[jupyter-server-proxy](https://jupyter-server-proxy.readthedocs.io) (4.1 or newer) in the
+Jupyter server's environment, add to its `jupyter_server_config.py`:
+
+```python
+c.ServerProxy.servers = {
+    'chopcal': {
+        'command': ['apptainer', 'run', '--app', 'broadway',
+                    '/path/to/chopcal-demo.sif', '{unix_socket}'],
+        'unix_socket': True,   # no TCP port another user on the machine could reach
+        'timeout': 60,
+        'launcher_entry': {'title': 'Choppers, interactively'},
+    },
+}
+```
+
+The tile starts one app per Jupyter server, kept running while the tab is closed and
+found as it was left; closing its window stops it, and the tile starts a new one.
+`apptainer run --app broadway chopcal-demo.sif 8080` serves it on 127.0.0.1:8080 instead.
+
 ## Without Jupyter
 
 ```python

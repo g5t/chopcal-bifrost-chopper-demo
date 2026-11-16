@@ -1,0 +1,77 @@
+# The Gtk app (gtk_app.py) in an image of its own. Build from this directory:
+#
+#     apptainer build chopcal-demo.sif chopcal-demo.def
+#
+# On a desktop (VISA, or anywhere with X11 or Wayland):
+#
+#     apptainer run chopcal-demo.sif [BIFROST | T-REX | IN5]
+#
+# In a browser tab, through Gtk's Broadway backend, served on 127.0.0.1:PORT or on a
+# Unix socket (what a jupyter-server-proxy launcher tile runs; see the README):
+#
+#     apptainer run --app broadway chopcal-demo.sif PORT|SOCKET [BIFROST | T-REX | IN5]
+#
+# Debian's Gtk 4, not conda-forge's: conda-forge builds it without Broadway.
+Bootstrap: docker
+From: debian:trixie-slim
+
+%files
+    gtk_app.py /opt/chopcal-demo/gtk_app.py
+    controls.py /opt/chopcal-demo/controls.py
+    phasespace.py /opt/chopcal-demo/phasespace.py
+    ess_butterfly.py /opt/chopcal-demo/ess_butterfly.py
+    bifrost.py /opt/chopcal-demo/bifrost.py
+    trex.py /opt/chopcal-demo/trex.py
+    in5.py /opt/chopcal-demo/in5.py
+    bifrost_guide_transmission.csv /opt/chopcal-demo/bifrost_guide_transmission.csv
+    in5_guide_transmission.csv /opt/chopcal-demo/in5_guide_transmission.csv
+    trex_guide_transmission_bender_in.csv /opt/chopcal-demo/trex_guide_transmission_bender_in.csv
+    trex_guide_transmission_bender_out.csv /opt/chopcal-demo/trex_guide_transmission_bender_out.csv
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    # apt cannot drop to its own user under an unprivileged --fakeroot build
+    echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/00sandbox
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-gi python3-gi-cairo gir1.2-gtk-4.0 libgtk-4-bin \
+        python3-matplotlib python3-numpy adwaita-icon-theme librsvg2-common fonts-dejavu-core
+    pip install --no-cache-dir --break-system-packages 'chopcal>=0.8'
+    rm -rf /var/lib/apt/lists/*
+    python3 -m compileall -q /opt/chopcal-demo
+
+%environment
+    export PYTHONNOUSERSITE=1
+    export MPLBACKEND=Agg   # not the host's (ipympl, say); gtk_app adds its own canvas
+
+%runscript
+    exec python3 /opt/chopcal-demo/gtk_app.py "$@"
+
+%apprun broadway
+    # a socket path (what a jupyter-server-proxy tile gives) or a port on 127.0.0.1
+    case ${1:?a port or a socket path to serve on} in
+        /*) listen="--unixsocket $1" ;;
+        *) listen="--address 127.0.0.1 --port $1" ;;
+    esac
+    shift
+    # broadwayd and the app meet at a socket here; /run/user is not bound in the container
+    export XDG_RUNTIME_DIR="$(mktemp -d)"
+    gtk4-broadwayd $listen :0 &
+    daemon=$!
+    trap 'kill $daemon $app 2>/dev/null; rm -r "$XDG_RUNTIME_DIR"' EXIT
+    trap 'exit 143' TERM INT HUP   # how jupyter-server-proxy stops it: through EXIT, too
+    until [ -S "$XDG_RUNTIME_DIR"/broadway1.socket ]; do
+        kill -0 $daemon 2>/dev/null || exit 1   # it could not listen: port taken?
+        sleep 0.1
+    done
+    GDK_BACKEND=broadway BROADWAY_DISPLAY=:0 python3 /opt/chopcal-demo/gtk_app.py "$@" &
+    app=$!
+    wait $app   # closing the window ends it
+
+%test
+    # bifrost.py's self-check drives the ipywidgets front end, which is not in here
+    cd /opt/chopcal-demo && python3 phasespace.py && python3 trex.py && python3 in5.py
+    python3 -c 'import gtk_app' && command -v gtk4-broadwayd
+
+%labels
+    Description chopcal's interactive chopper figures, in a Gtk 4 window

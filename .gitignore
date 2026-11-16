@@ -4,3 +4,4 @@ __pycache__/
 presentation.html
 presentation_files/
 gtk-env/
+*.sif

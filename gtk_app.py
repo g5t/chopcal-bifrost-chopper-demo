@@ -13,6 +13,7 @@ finds it as it was left. Moving a control recomputes once it has been still for
 from __future__ import annotations
 
 import math
+import os
 import sys
 
 import gi
@@ -281,7 +282,14 @@ class Window(Gtk.ApplicationWindow):
 def main(argv=None):
     argv = sys.argv if argv is None else argv
     app = Gtk.Application(application_id='eu.ess.chopcal.demo')
-    app.connect('activate', lambda a: Window(a, argv[1] if len(argv) > 1 else None).present())
+
+    def activate(app):
+        window = Window(app, argv[1] if len(argv) > 1 else None)
+        if os.environ.get('GDK_BACKEND') == 'broadway':
+            window.maximize()   # in a browser tab (chopcal-demo.def), the tab is the screen
+        window.present()
+
+    app.connect('activate', activate)
     return app.run(argv[:1])
 
 
