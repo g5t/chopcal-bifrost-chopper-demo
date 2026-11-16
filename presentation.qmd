@@ -3,8 +3,7 @@ title: "
 <h1 align='right' style='font-size:80pt; color:#fff'>Choppers, interactively</h1>
 "
 subtitle: "
-<h2 align='right' style='font-size:50pt; color:#fff'>Exact acceptance diagrams with chopcal<br>
-<span style='font-size:36pt'>BIFROST, T-REX and IN5</span><br><br>
+<h2 align='right' style='font-size:50pt; color:#fff'>Exact acceptance diagrams with chopcal<br><br>
 <b>Greg</b>ory S. Tucker<br>DMSC, ESS</h2>
 "
 format:
@@ -35,7 +34,7 @@ format:
     Spectroscopy Division Meeting
     |
     <i class='fa fa-person-chalkboard'></i>
-    Choppers, interactively
+    <tt>chopcal</tt>
     "
     pointer:
       color: lime
@@ -50,17 +49,17 @@ execute:
   warning: false
 ---
 
-## Overview {.center}
+# Overview {.center}
 - What chopcal is, and how it works
-- Three instruments, live: BIFROST, T-REX and IN5
+- Interactive acceptance diagrams
 - How far to trust it, and what comes next
 
-## chopcal
+# chopcal
 :::: {.columns}
 ::: {.column width="50%"}
 - Disc-chopper calculations that otherwise live inside McStas instruments, as a Python
   package: `pip install chopcal`
-- Each disc is described the way NeXus `NXdisk_chopper` and McStas describe it, so its
+- Each disc is described the way NeXus `NXdisk_chopper` and McStas `NXdisk_chopper.comp` describe it, so its
   numbers go in unconverted
 - It answers *what does this train pass?* exactly
   - as convex polygons, not a grid and not rays
@@ -93,18 +92,18 @@ intro_figures.disc();
 ```
 :::
 ::: {.column width="60%"}
-| | |
-|---|---|
-| `speed` | Hz; its sign is the direction of rotation |
-| `delay` | s: when the zero mark is on the beam |
-| `beam` | degrees from the mark to where the beam crosses |
-| `edges` | degrees from the mark, two per opening |
-| `path` | m from the source to the disc |
-| `aperture` | degrees: the beam's width on the disc |
+| property | unit | description |
+|---|---|---|
+| `speed` | Hz | sign is direction of rotation |
+| `delay` | s | when the zero mark is on the beam |
+| `beam` | degrees | from the mark to where the beam crosses |
+| `edges` | degrees | from the mark, two per opening |
+| `path` | m | source to disc distance |
+| `aperture` | degrees | the beam's width on the disc |
 
-An edge at angle *a* is on the beam at
+An edge at angle $a$ is on the beam at
 $$t(a) = \text{delay} + \frac{\text{beam} - a}{360\,\text{speed}}$$
-and every 1/|speed| after that.
+and every $1/|\text{speed}|$ after that.
 :::
 ::::
 
@@ -121,11 +120,11 @@ with intro_figures.style():
 ::: {.column width="36%"}
 <br>
 
-- A neutron emitted at *t* with wavelength *λ* reaches a disc *L* downstream at
-  *t* + *L λ m/h*
+- A neutron emitted at $t$ with wavelength $\lambda$ reaches a disc $L$ downstream at
+  $t + L \lambda m/h$
 - Each opening is a straight band
 - A train passes only where all its bands overlap
-- chopcal works in inverse velocity, where each band's slope is −*L*
+- chopcal works in inverse velocity, where each band's slope is $−L$
 :::
 ::::
 
@@ -141,16 +140,15 @@ with intro_figures.style():
 ::: {.column width="45%"}
 <br>
 
-- A wide beam opens each window half its width early and closes it half late: it changes
-  *when* a neutron passes, never its speed
+- A wide beam opens each window half its width early and closes it half late
+  - compared to a zero-width beam this changes only *when* a neutron passes
 - `Region.transmit` gives where anything passes
 - `Region.transmit_weighted` gives how likely a neutron is to pass, rising across the
   aperture
-- For BIFROST it matches McStas within counting error
 :::
 ::::
 
-## What one picture shows
+# What one picture shows
 :::: {.columns}
 ::: {.column width="55%"}
 - The source plane, wavelength against emission time, with the region the chopper
@@ -159,10 +157,7 @@ with intro_figures.style():
 - A time–distance diagram showing where each disc stops the beam
 :::
 ::: {.column width="45%"}
-- Pick an instrument from the drop-down
-- Its controls are the instrument's own settings: an energy and shaping time for
-  BIFROST, a wavelength and repetition-rate multiplication for T-REX, a wavelength,
-  speed and ratio for IN5
+- Interactive controls are the instrument's settings
 - Every change recomputes the transmitted region exactly
 :::
 ::::
@@ -172,7 +167,7 @@ Keep the live app running before the talk:
 `voila app.ipynb --no-browser --port=8866 --Voila.tornado_settings="{'headers': {'Content-Security-Policy': 'frame-ancestors *'}}"`
 :::
 
-## {#live background-iframe="http://localhost:8866" background-interactive="true"}
+# {#live background-iframe="http://localhost:8866" background-interactive="true"}
 
 ::: {.notes}
 The live app: pick an instrument from the drop-down. If it is blank, the app is not
@@ -207,7 +202,7 @@ fig, axes = make_axes(figsize=(19, 8.4))
 draw(transmission(IN5, dict(wavelength=4.5)), axes, guide=True)
 ```
 
-## How far to trust it
+# How far to trust it
 :::: {.columns}
 ::: {.column width="55%"}
 - The transmitted regions are exact
@@ -230,17 +225,22 @@ The instr simulates one frame of Chopper0, so it overstates the flux by 1/ratio.
 :::
 ::::
 
-## Next
+# Future
+Possible extensions for `chopcal`
+
 :::: {.columns}
 ::: {.column width="55%"}
-- Detectors and energy transfer, which need Bragg scattering for BIFROST's analysers
-- Hybrid spectrometers, which need Fermi choppers in chopcal
+- Detectors and energy transfer
+  - need Bragg scattering for BIFROST's analysers
+- Fermi choppers
 - Analytic guide transport in place of the McStas tables
 :::
 ::: {.column width="45%"}
 Try it:
 
 ```sh
+git clone https://github.com/g5t/chopcal-bifrost-chopper-demo.git
+cd chopcal-bifrost-chopper-demo
 uv sync --extra app
 uv run voila app.ipynb
 ```

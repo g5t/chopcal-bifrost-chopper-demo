@@ -56,7 +56,7 @@ def disc(ax=None):
                 linewidth=1, linestyle=':')
     ax.annotate('aperture: the beam\'s\nwidth on the disc', at(9, 1.13), xytext=(0.45, 1.32),
                 color='crimson', arrowprops=dict(arrowstyle='-', color='crimson'))
-    ax.text(0.14, 0.66, 'the beam\ncrosses here', color='crimson', ha='left', va='top')
+#    ax.text(0.14, 0.66, 'the beam\ncrosses here', color='crimson', ha='left', va='top')
     # the zero mark, and the angle from it to the beam
     ax.plot(*zip(at(mark, 0.85), at(mark, 1.08)), color='k', linewidth=3)
     ax.text(*at(mark, 1.22), 'zero\nmark', ha='right', va='center')
