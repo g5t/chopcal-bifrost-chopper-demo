@@ -193,6 +193,18 @@ The tile starts one app per Jupyter server, kept running while the tab is closed
 found as it was left; closing its window stops it, and the tile starts a new one.
 `apptainer run --app broadway chopcal-demo.sif 8080` serves it on 127.0.0.1:8080 instead.
 
+On VISA, or any machine with Environment Modules or Lmod, `modulefiles/chopcal-demo/1.0`
+gives a `chopcal-demo` command. It looks for the image as
+`/apps/containers/bin/chopcal-demo/chopcal-demo_1.0.sif`, or in `$CHOPCAL_DEMO_IMAGES`
+(an extracted `chopcal-demo_1.0/` beside it is used instead, for hosts without FUSE):
+
+```sh
+apptainer build /apps/containers/bin/chopcal-demo/chopcal-demo_1.0.sif chopcal-demo.def
+module use /path/to/chopcal-bifrost-chopper-demo/modulefiles
+module load chopcal-demo
+chopcal-demo                               # or: chopcal-demo T-REX, chopcal-demo IN5
+```
+
 ## Without Jupyter
 
 ```python
