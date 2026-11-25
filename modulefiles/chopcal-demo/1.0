@@ -1,0 +1,24 @@
+#%Module
+# chopcal's interactive chopper figures in a Gtk window, from the image chopcal-demo.def
+# builds:
+#
+#     module use /path/to/chopcal-bifrost-chopper-demo/modulefiles
+#     module load chopcal-demo
+#     chopcal-demo [BIFROST | T-REX | IN5]
+#
+# The image is chopcal-demo_{version}.sif in /apps/containers/bin/chopcal-demo, or in
+# $CHOPCAL_DEMO_IMAGES if that is set. An extracted sandbox, chopcal-demo_{version}/,
+# is preferred if there is one: it needs no FUSE, which some hosts lack.
+module-whatis "chopcal's interactive chopper figures (BIFROST, T-REX, IN5) in a Gtk window"
+
+set ver [file tail [file normalize [info script]]]
+set dir /apps/containers/bin/chopcal-demo
+if { [info exists ::env(CHOPCAL_DEMO_IMAGES)] } {
+  set dir $::env(CHOPCAL_DEMO_IMAGES)
+}
+set tainer [file join $dir chopcal-demo_$ver]
+if { ![file isdirectory $tainer] } {
+  set tainer $tainer.sif
+}
+
+set-alias chopcal-demo "apptainer run $tainer"

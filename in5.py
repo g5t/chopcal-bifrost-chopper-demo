@@ -150,16 +150,14 @@ class In5(Instrument):
         return out
 
     def controls(self, wavelength=4.5, speed=8500, ratio=0.5, counter=True):
-        from ipywidgets import Checkbox, FloatSlider, SelectionSlider
+        from controls import Choice, Number, Switch
         ratios = [(f'1/{k}' if k > 1 else '1', 1 / k) for k in range(1, 7)]
         return {
-            'wavelength': FloatSlider(value=wavelength, min=1.0, max=12.0, step=0.01,
-                                      description='wavelength [Å]'),
-            'speed': FloatSlider(value=speed, min=1000, max=17000, step=100,
-                                 description='speed [rpm]'),
-            'ratio': SelectionSlider(options=ratios, value=min(ratios, key=lambda r: abs(r[1] - ratio))[1],
-                                     description='disc 3 ratio'),
-            'counter': Checkbox(value=counter, description='counter-rotating pairs'),
+            'wavelength': Number('wavelength [Å]', wavelength, 1.0, 12.0, 0.01),
+            'speed': Number('speed [rpm]', speed, 1000, 17000, 100),
+            'ratio': Choice('disc 3 ratio', ratios,
+                            min(ratios, key=lambda r: abs(r[1] - ratio))[1]),
+            'counter': Switch('counter-rotating pairs', counter),
         }
 
     def train_period(self, wavelength=4.5, speed=8500, ratio=0.5, counter=True):

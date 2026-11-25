@@ -3,3 +3,5 @@ __pycache__/
 .ipynb_checkpoints/
 presentation.html
 presentation_files/
+gtk-env/
+*.sif
